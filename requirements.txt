@@ -1,0 +1,19 @@
+# Isaac-VR 텔레오퍼레이션 시스템 필수 패키지
+
+# VR 연동
+openvr>=1.3.22          # SteamVR 연동
+pyopenxr>=1.0.0         # Quest 3 연동 (선택사항)
+
+# 데이터 처리
+numpy>=1.21.0
+scipy>=1.7.0
+h5py>=3.7.0             # HDF5 파일 처리
+
+# Isaac Sim 연동 (이미 설치되어 있어야 함)
+# isaaclab
+# isaaclab_assets  
+# isaaclab_tasks
+
+# 기타 유틸리티
+pyyaml>=6.0             # YAML 설정 파일
+tqdm>=4.64.0            # 진행률 표시
