@@ -56,9 +56,41 @@ class ShadowHandController:
         try:
             self.logger.info(f"환경 초기화 중: {self.environment_name}")
             
-            # 환경 생성
-            self.env = gym.make(self.environment_name)
-            self.logger.info("✅ IsaacLab 환경 생성 성공!")
+            # 환경 생성 (Isaac Sim 없이도 실행 가능하도록)
+            try:
+                # IsaacLab 환경 등록 시도
+                import isaaclab
+                import isaaclab_tasks
+                self.logger.info("✅ IsaacLab 환경 등록 완료!")
+                
+                # IsaacLab 환경인 경우
+                if "Isaac-" in self.environment_name:
+                    if "Shadow" in self.environment_name:
+                        # Shadow Hand 환경
+                        from isaaclab_tasks.direct.shadow_hand.shadow_hand_env import ShadowHandEnvCfg
+                        self.env = gym.make(self.environment_name, cfg=ShadowHandEnvCfg())
+                    elif "Cartpole" in self.environment_name:
+                        # Cartpole 환경
+                        from isaaclab_tasks.direct.cartpole.cartpole_env import CartpoleEnvCfg
+                        self.env = gym.make(self.environment_name, cfg=CartpoleEnvCfg())
+                    else:
+                        # 기타 IsaacLab 환경
+                        self.env = gym.make(self.environment_name)
+                else:
+                    # 일반 gymnasium 환경인 경우
+                    self.env = gym.make(self.environment_name)
+                self.logger.info("✅ IsaacLab 환경 생성 성공!")
+                
+            except ImportError as e:
+                # Isaac Sim이 없는 경우 일반 gymnasium 환경 사용
+                self.logger.warning(f"Isaac Sim을 찾을 수 없습니다: {e}")
+                self.logger.info("일반 gymnasium 환경을 사용합니다.")
+                self.env = gym.make(self.environment_name)
+                self.logger.info("✅ 일반 gymnasium 환경 생성 성공!")
+            
+            # 환경 리셋하여 Isaac Sim 윈도우에 로드
+            obs, info = self.env.reset()
+            self.logger.info("✅ Isaac Sim 윈도우에 환경 로드 완료!")
             
             # Shadow Hand 객체 찾기
             self.robot = self._find_shadow_hand()

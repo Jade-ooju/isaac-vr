@@ -33,9 +33,9 @@ class ShadowHandTeleop:
         # 설정 로드
         self.config = self._load_config(config_path)
         
-        # 로깅 설정
-        self._setup_logging()
-        self.logger = logging.getLogger(__name__)
+        # 로깅 설정 제거 (print 사용)
+        # self._setup_logging()
+        # self.logger = logging.getLogger(__name__)
         
         # 컴포넌트 초기화
         self.vr_tracker = None
@@ -63,10 +63,10 @@ class ShadowHandTeleop:
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
-            self.logger.info(f"설정 파일 로드 성공: {config_path}")
+            print(f"설정 파일 로드 성공: {config_path}")
             return config
         except Exception as e:
-            self.logger.warning(f"설정 파일 로드 실패: {e}, 기본 설정 사용")
+            print(f"설정 파일 로드 실패: {e}, 기본 설정 사용")
             return self._get_default_config()
     
     def _get_default_config(self) -> dict:
@@ -126,21 +126,21 @@ class ShadowHandTeleop:
             # 좌표계 변환기 초기화
             self.coordinate_transformer = CoordinateTransformer()
             
-            self.logger.info("✅ 모든 컴포넌트 초기화 완료!")
+            print("✅ 모든 컴포넌트 초기화 완료!")
             
         except Exception as e:
-            self.logger.error(f"컴포넌트 초기화 실패: {e}")
+            print(f"컴포넌트 초기화 실패: {e}")
             raise
     
     def run(self):
         """메인 텔레오퍼레이션 루프 실행"""
         if not self._check_components():
-            self.logger.error("컴포넌트 초기화가 완료되지 않았습니다")
+            print("컴포넌트 초기화가 완료되지 않았습니다")
             return
         
-        self.logger.info("🚀 Shadow Hand 텔레오퍼레이션 시작!")
-        self.logger.info(f"업데이트 주파수: {self.update_rate} Hz")
-        self.logger.info("Ctrl+C로 중지할 수 있습니다")
+        print("🚀 Shadow Hand 텔레오퍼레이션 시작!")
+        print(f"업데이트 주파수: {self.update_rate} Hz")
+        print("Ctrl+C로 중지할 수 있습니다")
         
         self.is_running = True
         self.start_time = time.time()
@@ -188,24 +188,24 @@ class ShadowHandTeleop:
                     time.sleep(self.update_interval - elapsed)
                 
         except KeyboardInterrupt:
-            self.logger.info("\n⏹️ 사용자에 의해 중지됨")
+            print("\n⏹️ 사용자에 의해 중지됨")
         except Exception as e:
-            self.logger.error(f"텔레오퍼레이션 실행 중 에러: {e}")
+            print(f"텔레오퍼레이션 실행 중 에러: {e}")
         finally:
             self.cleanup()
     
     def _check_components(self) -> bool:
         """컴포넌트 상태 확인"""
         if self.vr_tracker is None:
-            self.logger.error("VR 트래커가 초기화되지 않았습니다")
+            print("VR 트래커가 초기화되지 않았습니다")
             return False
         
         if self.hand_controller is None or not self.hand_controller.is_initialized:
-            self.logger.error("Shadow Hand 컨트롤러가 초기화되지 않았습니다")
+            print("Shadow Hand 컨트롤러가 초기화되지 않았습니다")
             return False
         
         if self.motion_mapper is None:
-            self.logger.error("모션 매퍼가 초기화되지 않았습니다")
+            print("모션 매퍼가 초기화되지 않았습니다")
             return False
         
         return True
@@ -215,20 +215,20 @@ class ShadowHandTeleop:
         elapsed_time = time.time() - self.start_time
         fps = self.frame_count / elapsed_time if elapsed_time > 0 else 0
         
-        self.logger.info(f"📊 성능 통계: FPS={fps:.1f}, 프레임={self.frame_count}, 시간={elapsed_time:.1f}s")
+        print(f"📊 성능 통계: FPS={fps:.1f}, 프레임={self.frame_count}, 시간={elapsed_time:.1f}s")
         
         # VR 트래킹 상태 출력
         tracking_status = self.vr_tracker.get_tracking_status()
-        self.logger.info(f"VR 상태: 연결={tracking_status['is_connected']}, 신뢰도={tracking_status['confidence']:.2f}")
+        print(f"VR 상태: 연결={tracking_status['is_connected']}, 신뢰도={tracking_status['confidence']:.2f}")
         
         # Shadow Hand 상태 출력
         current_joints = self.hand_controller.get_joint_positions()
         joint_range = f"[{current_joints.min():.3f}, {current_joints.max():.3f}]"
-        self.logger.info(f"Shadow Hand: 관절 범위={joint_range}")
+        print(f"Shadow Hand: 관절 범위={joint_range}")
     
     def cleanup(self):
         """리소스 정리"""
-        self.logger.info("🧹 리소스 정리 중...")
+        print("🧹 리소스 정리 중...")
         
         self.is_running = False
         
@@ -239,10 +239,10 @@ class ShadowHandTeleop:
             if self.hand_controller:
                 self.hand_controller.close()
             
-            self.logger.info("✅ 리소스 정리 완료")
+            print("✅ 리소스 정리 완료")
             
         except Exception as e:
-            self.logger.error(f"리소스 정리 중 에러: {e}")
+            print(f"리소스 정리 중 에러: {e}")
     
     def __del__(self):
         """소멸자"""

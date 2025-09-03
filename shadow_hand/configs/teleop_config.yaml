@@ -1,7 +1,7 @@
 # 텔레오퍼레이션 설정 파일
 
 # VR 설정
-vr:
+vr_tracker:
   # VR 시스템 타입: "steamvr", "quest3", "auto"
   system_type: "auto"
   
