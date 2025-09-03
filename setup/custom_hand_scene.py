@@ -53,20 +53,30 @@ from isaaclab_assets.robots.allegro import ALLEGRO_HAND_CFG  # isort:skip
 from isaaclab_assets.robots.shadow_hand import SHADOW_HAND_CFG  # isort:skip
 
 
-class VRHandMotionLoader:
-    """Loader for Quest 3 VR hand motion data."""
+class VRHandMotionSequence:
+    """Manages sequences of Quest 3 VR hand motion data from multiple JSON files."""
     
-    def __init__(self, dataset_path: str):
-        """Initialize the VR hand motion loader.
+    def __init__(self, dataset_path: str, sequence_type: str = "Pick", target_duration: float = 3.0):
+        """Initialize the VR hand motion sequence manager.
         
         Args:
             dataset_path: Path to the Quest dataset directory
+            sequence_type: Type of sequence to play ("Hold", "Place", "Pick", or "All")
+            target_duration: Target duration in seconds for each animation (default: 3.0)
         """
         self.dataset_path = Path(dataset_path)
-        self.motion_files = self._get_motion_files()
-        self.current_motion_index = 0
+        self.sequence_type = sequence_type
+        self.target_duration = target_duration
+        self.motion_groups = {
+            'Hold': [],
+            'Place': [],
+            'Pick': []
+        }
+        self.current_group = sequence_type
+        self.current_file_index = 0
         self.current_frame_index = 0
         self.motion_data = None
+        self.frame_skip = 1  # Will be calculated based on target duration
         
         # Hand joint names in order
         self.joint_names = [
@@ -78,48 +88,105 @@ class VRHandMotionLoader:
             "PinkyMetacarpal", "PinkyProximal", "PinkyIntermediate", "PinkyDistal", "PinkyTip"
         ]
         
-    def _get_motion_files(self) -> list:
-        """Get all motion files from the dataset directory."""
-        motion_files = []
-        for file_path in self.dataset_path.glob("*.json"):
-            motion_files.append(file_path)
-        return sorted(motion_files)
-    
-    def load_motion(self, motion_index: int | None = None) -> bool:
-        """Load a specific motion file.
+        self._scan_and_categorize_files()
+        self._load_current_motion()
         
-        Args:
-            motion_index: Index of the motion file to load. If None, loads current index.
-            
-        Returns:
-            True if successful, False otherwise.
-        """
-        if motion_index is not None:
-            self.current_motion_index = motion_index
-            
-        if self.current_motion_index >= len(self.motion_files):
+        total_files = sum(len(files) for files in self.motion_groups.values())
+        print(f"[INFO]: Found {total_files} VR motion files total")
+        print(f"[INFO]: Hold: {len(self.motion_groups['Hold'])}, Place: {len(self.motion_groups['Place'])}, Pick: {len(self.motion_groups['Pick'])}")
+        
+    def _scan_and_categorize_files(self):
+        """Scan all JSON files and categorize them by type."""
+        if not self.dataset_path.exists():
+            print(f"[ERROR]: Dataset path does not exist: {self.dataset_path}")
+            return
+        
+        for file_path in self.dataset_path.glob("*.json"):
+            filename = file_path.name
+            if filename.startswith('Hold_'):
+                self.motion_groups['Hold'].append(filename)
+            elif filename.startswith('Place_'):
+                self.motion_groups['Place'].append(filename)
+            elif filename.startswith('Pick_'):
+                self.motion_groups['Pick'].append(filename)
+        
+        # Sort each group
+        for group in self.motion_groups:
+            self.motion_groups[group].sort()
+    
+    def _load_current_motion(self) -> bool:
+        """Load the current motion file."""
+        current_group_files = self.motion_groups[self.current_group]
+        if not current_group_files or self.current_file_index >= len(current_group_files):
+            print(f"[ERROR]: No files available in group {self.current_group}")
             return False
-            
+        
+        motion_file = current_group_files[self.current_file_index]
+        file_path = self.dataset_path / motion_file
+        
         try:
-            file_path = self.motion_files[self.current_motion_index]
-            print(f"[DEBUG]: Attempting to load file: {file_path}")
-            print(f"[DEBUG]: File size: {file_path.stat().st_size} bytes")
-            
+            print(f"[DEBUG]: Loading motion: {motion_file}")
             with open(file_path, 'r', encoding='utf-8-sig') as f:
                 content = f.read()
-                print(f"[DEBUG]: File content length: {len(content)} characters")
                 if len(content) == 0:
                     print(f"[ERROR]: File is empty: {file_path}")
                     return False
                 
                 self.motion_data = json.loads(content)
-                print(f"[DEBUG]: Successfully loaded JSON with {len(self.motion_data.get('frames', []))} frames")
+                total_frames = len(self.motion_data.get('frames', []))
+                print(f"[DEBUG]: Successfully loaded JSON with {total_frames} frames")
                 
+                # Calculate frame skip to achieve target duration
+                if total_frames > 0:
+                    # Assuming 30 FPS for VR data (typical Quest frame rate)
+                    original_duration = total_frames / 30.0
+                    self.frame_skip = max(1, int(original_duration / self.target_duration))
+                    actual_duration = (total_frames / self.frame_skip) / 30.0
+                    print(f"[INFO]: Original duration: {original_duration:.2f}s, Target: {self.target_duration}s, Frame skip: {self.frame_skip}, Actual duration: {actual_duration:.2f}s")
+                else:
+                    self.frame_skip = 1
+            
             self.current_frame_index = 0
+            motion_info = self.get_motion_info()
+            print(f"[INFO]: Loaded VR motion: {motion_info}")
+            
             return True
+            
         except Exception as e:
-            print(f"[ERROR]: Failed to load motion file {self.motion_files[self.current_motion_index]}: {e}")
+            print(f"[ERROR]: Failed to load motion file {motion_file}: {e}")
             return False
+    
+    def next_motion(self) -> bool:
+        """Advance to the next motion in the sequence."""
+        current_group_files = self.motion_groups[self.current_group]
+        
+        if self.current_file_index < len(current_group_files) - 1:
+            # Same group, next file
+            self.current_file_index += 1
+        else:
+            # Move to next group
+            if self.current_group == 'Hold':
+                self.current_group = 'Place'
+            elif self.current_group == 'Place':
+                self.current_group = 'Pick'
+            else:  # Pick
+                self.current_group = 'Hold'
+            
+            self.current_file_index = 0
+        
+        print(f"[INFO]: Switching to group: {self.current_group}, file: {self.current_file_index + 1}")
+        return self._load_current_motion()
+    
+    def has_current_frame(self) -> bool:
+        """Check if there's a current frame available."""
+        return (self.motion_data is not None and 
+                'frames' in self.motion_data and 
+                self.current_frame_index < len(self.motion_data['frames']))
+    
+    def get_current_joint_positions(self) -> torch.Tensor:
+        """Get joint positions for the current frame."""
+        frame_data = self.get_current_frame()
+        return self.get_joint_positions(frame_data)
     
     def get_current_frame(self) -> dict | None:
         """Get the current frame data.
@@ -127,26 +194,27 @@ class VRHandMotionLoader:
         Returns:
             Dictionary containing joint positions and metadata, or None if no data.
         """
-        if not self.motion_data or not self.motion_data.get("frames"):
+        if not self.has_current_frame():
             return None
             
-        if self.current_frame_index >= len(self.motion_data["frames"]):
-            return None
-            
-        return self.motion_data["frames"][self.current_frame_index]
+        if self.motion_data and "frames" in self.motion_data:
+            return self.motion_data["frames"][self.current_frame_index]
+        return None
     
-    def get_joint_positions(self, frame_data: dict) -> torch.Tensor | None:
+    def get_joint_positions(self, frame_data: dict | None = None) -> torch.Tensor:
         """Extract joint positions from frame data.
         
         Args:
-            frame_data: Frame data dictionary from the motion file.
+            frame_data: Frame data dictionary from the motion file. If None, uses current frame.
             
         Returns:
             Tensor of shape (num_joints, 3) containing joint positions.
         """
+        if frame_data is None:
+            frame_data = self.get_current_frame()
+        
         if not frame_data or "joints" not in frame_data:
-            print(f"[DEBUG]: No frame data or joints found. Frame data: {frame_data}")
-            return None
+            return torch.zeros(len(self.joint_names), 3)
             
         positions = []
         joint_dict = {joint["jointName"]: joint for joint in frame_data["joints"]}
@@ -168,16 +236,19 @@ class VRHandMotionLoader:
         return torch.tensor(positions, dtype=torch.float32)
     
     def next_frame(self) -> bool:
-        """Move to the next frame.
+        """Move to the next frame with frame skipping.
         
         Returns:
             True if there are more frames, False if at the end.
         """
-        if not self.motion_data or not self.motion_data.get("frames"):
+        if not self.has_current_frame():
             return False
             
-        self.current_frame_index += 1
-        return self.current_frame_index < len(self.motion_data["frames"])
+        # Skip frames to achieve target duration
+        self.current_frame_index += self.frame_skip
+        if self.motion_data and "frames" in self.motion_data:
+            return self.current_frame_index < len(self.motion_data["frames"])
+        return False
     
     def reset_frame(self):
         """Reset to the first frame."""
@@ -191,12 +262,17 @@ class VRHandMotionLoader:
         """
         if not self.motion_data:
             return "No motion loaded"
-            
-        motion_file = self.motion_files[self.current_motion_index]
+        
+        current_group_files = self.motion_groups[self.current_group]
+        if not current_group_files or self.current_file_index >= len(current_group_files):
+            return "Invalid motion state"
+        
+        motion_file = current_group_files[self.current_file_index]
         num_frames = len(self.motion_data.get("frames", []))
         interaction_target = self.motion_data.get("interactionTargetObject", "Unknown")
+        effective_frames = num_frames // self.frame_skip if self.frame_skip > 0 else num_frames
         
-        return f"Motion: {motion_file.name} | Frames: {num_frames} | Target: {interaction_target} | Frame: {self.current_frame_index + 1}/{num_frames}"
+        return f"Group: {self.current_group} | Motion: {motion_file} | Frames: {num_frames} (skip: {self.frame_skip}) | Target: {interaction_target} | Frame: {self.current_frame_index + 1}/{effective_frames}"
 
 
 class VRHandVisualizer:
@@ -315,7 +391,7 @@ def define_origins(num_origins: int, spacing: float) -> list[list[float]]:
     return env_origins.tolist()
 
 
-def design_scene() -> tuple[dict, list[list[float]], VRHandMotionLoader, VRHandVisualizer]:
+def design_scene() -> tuple[dict, list[list[float]], VRHandMotionSequence, VRHandVisualizer]:
     """Designs the scene."""
     # Ground-plane
     cfg = sim_utils.GroundPlaneCfg()
@@ -340,38 +416,18 @@ def design_scene() -> tuple[dict, list[list[float]], VRHandMotionLoader, VRHandV
     
     # Initialize VR hand motion loader and visualizer
     dataset_path = os.path.join(os.path.dirname(__file__), "..", "..", "datasets", "Quest")
-    vr_motion_loader = VRHandMotionLoader(dataset_path)
+    vr_motion_sequence = VRHandMotionSequence(dataset_path, sequence_type="Pick", target_duration=3.0)
     vr_hand_visualizer = VRHandVisualizer("/World/Origin2/VRHand")
-    
-    # Load Hold_001.json specifically
-    hold_files = [f for f in vr_motion_loader.motion_files if "Hold_001" in f.name]
-    print(f"[DEBUG]: Found {len(hold_files)} Hold_001 files: {[f.name for f in hold_files]}")
-    
-    if hold_files:
-        # Find the index of Hold_001.json
-        hold_index = vr_motion_loader.motion_files.index(hold_files[0])
-        if vr_motion_loader.load_motion(hold_index):
-            print(f"[INFO]: Loaded VR motion: {vr_motion_loader.get_motion_info()}")
-        else:
-            print("[WARNING]: Failed to load Hold_001.json, trying first available file")
-            if vr_motion_loader.motion_files:
-                vr_motion_loader.load_motion(0)
-                print(f"[INFO]: Loaded VR motion: {vr_motion_loader.get_motion_info()}")
-    else:
-        print("[WARNING]: Hold_001.json not found, loading first available motion file")
-        if vr_motion_loader.motion_files:
-            vr_motion_loader.load_motion(0)
-            print(f"[INFO]: Loaded VR motion: {vr_motion_loader.get_motion_info()}")
 
     # return the scene information
     scene_entities = {
         "shadow_hand": shadow_hand,
     }
-    return scene_entities, origins, vr_motion_loader, vr_hand_visualizer
+    return scene_entities, origins, vr_motion_sequence, vr_hand_visualizer
 
 
 def run_simulator(sim: sim_utils.SimulationContext, entities: dict[str, Articulation], origins: torch.Tensor, 
-                  vr_motion_loader: VRHandMotionLoader, vr_hand_visualizer: VRHandVisualizer):
+                  vr_motion_sequence: VRHandMotionSequence, vr_hand_visualizer: VRHandVisualizer):
     """Runs the simulation loop."""
     # Define simulation stepping
     sim_dt = sim.get_physics_dt()
@@ -404,7 +460,7 @@ def run_simulator(sim: sim_utils.SimulationContext, entities: dict[str, Articula
                 # reset the internal state
                 robot.reset()
             # Reset VR motion
-            vr_motion_loader.reset_frame()
+            vr_motion_sequence.reset_frame()
             print("[INFO]: Resetting robots state...")
         
         # Toggle grasp mode for robot hands
@@ -412,31 +468,28 @@ def run_simulator(sim: sim_utils.SimulationContext, entities: dict[str, Articula
             grasp_mode = 1 - grasp_mode
         
         # Update VR hand visualization every few frames
-        if count % 5 == 0 and vr_motion_loader.motion_data:
-            frame_data = vr_motion_loader.get_current_frame()
-            if frame_data:
-                print(f"[DEBUG]: Processing frame {vr_motion_loader.current_frame_index}")
-                joint_positions = vr_motion_loader.get_joint_positions(frame_data)
-                if joint_positions is not None:
-                    # Apply offset to position the VR hand next to the robot hand
-                    vr_offset = torch.tensor([0.0, 0.0, 0.0], device=sim.device)
-                    vr_hand_visualizer.update_joint_positions(joint_positions, vr_offset)
-                    
-                    # Debug: Print first few joint positions occasionally
-                    if count % 100 == 0:
-                        print(f"[DEBUG]: VR Hand - Frame {vr_motion_loader.current_frame_index}, "
-                              f"Wrist pos: {joint_positions[0].tolist()}, "
-                              f"Palm pos: {joint_positions[2].tolist()}")
-                else:
-                    print(f"[DEBUG]: Failed to get joint positions for frame {vr_motion_loader.current_frame_index}")
-                
-                # Move to next frame
-                if not vr_motion_loader.next_frame():
-                    # If we've reached the end, reset to beginning for Hold_001.json loop
-                    vr_motion_loader.reset_frame()
-                    print("[INFO]: Restarting Hold_001.json motion")
-            else:
-                print(f"[DEBUG]: No frame data for frame {vr_motion_loader.current_frame_index}")
+        if count % 5 == 0 and vr_motion_sequence.has_current_frame():
+            print(f"[DEBUG]: Processing frame {vr_motion_sequence.current_frame_index}")
+            joint_positions = vr_motion_sequence.get_current_joint_positions()
+            
+            # Apply offset to position the VR hand next to the robot hand
+            vr_offset = torch.tensor([0.0, 0.0, 0.0], device=sim.device)
+            vr_hand_visualizer.update_joint_positions(joint_positions, vr_offset)
+            
+            # Debug: Print first few joint positions occasionally
+            if count % 100 == 0:
+                print(f"[DEBUG]: VR Hand - Frame {vr_motion_sequence.current_frame_index}, "
+                      f"Wrist pos: {joint_positions[0].tolist()}, "
+                      f"Palm pos: {joint_positions[2].tolist()}")
+            
+            # Move to next frame
+            if not vr_motion_sequence.next_frame():
+                # If we've reached the end, move to next motion in sequence
+                print(f"[INFO]: Motion completed, switching to next motion")
+                if not vr_motion_sequence.next_motion():
+                    print("[WARNING]: Failed to load next motion")
+        elif count % 5 == 0:
+            print(f"[DEBUG]: No current frame available")
         
         # Apply default actions to the robot hands
         for robot in entities.values():
@@ -465,15 +518,14 @@ def main():
     # Set main camera
     sim.set_camera_view(eye=(0.0, -0.5, 1.5), target=(0.0, -0.2, 0.5))
     # design scene
-    scene_entities, scene_origins, vr_motion_loader, vr_hand_visualizer = design_scene()
+    scene_entities, scene_origins, vr_motion_sequence, vr_hand_visualizer = design_scene()
     scene_origins = torch.tensor(scene_origins, device=sim.device)
     # Play the simulator
     sim.reset()
     # Now we are ready!
     print("[INFO]: Setup complete...")
-    print(f"[INFO]: Found {len(vr_motion_loader.motion_files)} VR motion files")
     # Run the simulator
-    run_simulator(sim, scene_entities, scene_origins, vr_motion_loader, vr_hand_visualizer)
+    run_simulator(sim, scene_entities, scene_origins, vr_motion_sequence, vr_hand_visualizer)
 
 
 if __name__ == "__main__":
