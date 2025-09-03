@@ -1,4 +1,4 @@
-# Isaac-VR Quick Start Guide
+# Isaac-VR Quick Start Guide 
 
 ## Overview
 This guide provides quick start instructions for the Isaac-VR system, which enables VR-based teleoperation and imitation learning for Isaac Sim robots.

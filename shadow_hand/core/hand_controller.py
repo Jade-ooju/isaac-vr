@@ -7,7 +7,26 @@ import time
 import numpy as np
 from typing import Optional, Dict, Any, List
 import logging
-import gymnasium as gym
+
+# Isaac Lab imports with error handling
+try:
+    from isaaclab.envs import ManagerBasedRLEnv
+    from isaaclab.utils.dict import update_dict
+    ISAAC_LAB_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Isaac Lab not available: {e}")
+    print("Running in standalone mode without Isaac Lab integration")
+    ISAAC_LAB_AVAILABLE = False
+    # Create dummy classes for standalone mode
+    class ManagerBasedRLEnv:
+        def __init__(self, *args, **kwargs):
+            pass
+        def reset(self):
+            return None, {}
+        def step(self, action):
+            return None, 0, False, {}
+        def close(self):
+            pass
 
 class ShadowHandController:
     """Shadow Hand control class"""
@@ -56,54 +75,49 @@ class ShadowHandController:
         try:
             self.logger.info(f"Initializing environment: {self.environment_name}")
             
-            # Create environment (can run without Isaac Sim)
-            try:
-                # Attempt IsaacLab environment registration
-                import isaaclab
-                import isaaclab_tasks
-                self.logger.info("IsaacLab environment registration completed!")
-                
-                # For IsaacLab environments
-                if "Isaac-" in self.environment_name:
-                    if "Shadow" in self.environment_name:
+            if ISAAC_LAB_AVAILABLE:
+                # Use Isaac Lab's ManagerBasedRLEnv
+                try:
+                    # Import Isaac Lab environment configuration
+                    import isaaclab_tasks
+                    self.logger.info("IsaacLab environment registration completed!")
+                    
+                    # Create environment using Isaac Lab's method
+                    if "Isaac-Repose-Cube-Shadow-Direct-v0" in self.environment_name:
                         # Shadow Hand environment
-                        from isaaclab_tasks.direct.shadow_hand.shadow_hand_env import ShadowHandEnvCfg
-                        self.env = gym.make(self.environment_name, cfg=ShadowHandEnvCfg())
-                    elif "Cartpole" in self.environment_name:
-                        # Cartpole environment
-                        from isaaclab_tasks.direct.cartpole.cartpole_env import CartpoleEnvCfg
-                        self.env = gym.make(self.environment_name, cfg=CartpoleEnvCfg())
+                        from isaaclab_tasks.direct.shadow_hand.shadow_hand_env_cfg import ShadowHandEnvCfg
+                        cfg = ShadowHandEnvCfg()
+                        self.env = ManagerBasedRLEnv(cfg=cfg)
+                        self.logger.info("Isaac Lab Shadow Hand environment created successfully!")
                     else:
-                        # Other IsaacLab environments
-                        self.env = gym.make(self.environment_name)
-                else:
-                    # For general gymnasium environments
-                    self.env = gym.make(self.environment_name)
-                self.logger.info("IsaacLab environment creation successful!")
-                
-            except ImportError as e:
-                # Use general gymnasium environment if Isaac Sim is not available
-                self.logger.warning(f"Isaac Sim not found: {e}")
-                self.logger.info("Using general gymnasium environment.")
-                self.env = gym.make(self.environment_name)
-                self.logger.info("General gymnasium environment creation successful!")
-            
-            # Reset environment to load into Isaac Sim window
-            obs, info = self.env.reset()
-            self.logger.info("Environment loaded into Isaac Sim window!")
-            
-            # Find Shadow Hand object
-            self.robot = self._find_shadow_hand()
-            
-            if self.robot is not None:
-                self.is_initialized = True
-                self.logger.info("Shadow Hand object found successfully!")
-                
-                # Get initial joint state
-                self._update_current_state()
-                
+                        # Other Isaac Lab environments
+                        self.env = ManagerBasedRLEnv(cfg=None)
+                        self.logger.info("Isaac Lab environment created successfully!")
+                    
+                    # Reset environment to load into Isaac Sim window
+                    obs, info = self.env.reset()
+                    self.logger.info("Environment loaded into Isaac Sim window!")
+                    
+                    # Find Shadow Hand object
+                    self.robot = self._find_shadow_hand()
+                    
+                    if self.robot is not None:
+                        self.is_initialized = True
+                        self.logger.info("Shadow Hand object found successfully!")
+                        
+                        # Get initial joint state
+                        self._update_current_state()
+                        
+                    else:
+                        self.logger.error("Shadow Hand object not found")
+                        self.is_initialized = False
+                        
+                except Exception as e:
+                    self.logger.error(f"Isaac Lab environment creation failed: {e}")
+                    self.is_initialized = False
             else:
-                self.logger.error("Shadow Hand object not found")
+                # Fallback to standalone mode
+                self.logger.warning("Isaac Lab not available, running in standalone mode")
                 self.is_initialized = False
                 
         except Exception as e:
@@ -118,21 +132,26 @@ class ShadowHandController:
         # Try multiple methods to find Shadow Hand object
         robot_candidates = []
         
-        # 1. Check direct robot attribute
+        # 1. Check Isaac Lab ManagerBasedRLEnv structure
+        if hasattr(self.env, 'scene'):
+            if hasattr(self.env.scene, 'robot'):
+                robot_candidates.append(('env.scene.robot', self.env.scene.robot))
+        
+        # 2. Check direct robot attribute
         if hasattr(self.env, 'robot'):
             robot_candidates.append(('env.robot', self.env.robot))
         
-        # 2. Check _env attribute
+        # 3. Check _env attribute
         if hasattr(self.env, '_env'):
             if hasattr(self.env._env, 'robot'):
                 robot_candidates.append(('env._env.robot', self.env._env.robot))
         
-        # 3. Check env attribute
-        if hasattr(self.env, 'env'):
-            if hasattr(self.env.env, 'robot'):
-                robot_candidates.append(('env.env.robot', self.env.env.robot))
+        # 4. Check Isaac Lab specific attributes
+        if hasattr(self.env, 'managers'):
+            if hasattr(self.env.managers, 'robot'):
+                robot_candidates.append(('env.managers.robot', self.env.managers.robot))
         
-        # 4. Print environment structure (for debugging)
+        # 5. Print environment structure (for debugging)
         if not robot_candidates:
             self.logger.info("Environment structure analysis:")
             self._print_environment_structure(self.env)
@@ -297,11 +316,13 @@ class ShadowHandController:
             return False
         
         try:
-            # Set joint positions
+            # Set joint positions using Isaac Lab methods
             if hasattr(self.robot, 'set_joint_position_target'):
                 self.robot.set_joint_position_target(joint_positions)
             elif hasattr(self.robot, 'set_joint_positions'):
                 self.robot.set_joint_positions(joint_positions)
+            elif hasattr(self.robot, 'write_joint_positions'):
+                self.robot.write_joint_positions(joint_positions)
             else:
                 self.logger.warning("Joint position setting method not found")
                 return False
@@ -309,6 +330,8 @@ class ShadowHandController:
             # Write data to simulation
             if hasattr(self.robot, 'write_data_to_sim'):
                 self.robot.write_data_to_sim()
+            elif hasattr(self.robot, 'write'):
+                self.robot.write()
             
             # Update current state
             self.current_joint_positions = joint_positions.copy()
@@ -354,9 +377,12 @@ class ShadowHandController:
             return False
         
         try:
-            # Execute environment step
+            # Execute environment step using Isaac Lab methods
             if hasattr(self.env, 'step'):
-                self.env.step(None)
+                # For Isaac Lab ManagerBasedRLEnv, we need to provide an action
+                # Create a dummy action (zeros) for the step
+                dummy_action = np.zeros(20)  # 20 joint actions for Shadow Hand
+                obs, reward, terminated, truncated, info = self.env.step(dummy_action)
                 return True
             else:
                 self.logger.warning("Environment step method not found")
