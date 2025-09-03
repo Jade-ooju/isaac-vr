@@ -1,6 +1,6 @@
 """
-VR 핸드 트래킹 클래스
-Quest 3, SteamVR 등 다양한 VR 시스템에서 핸드 데이터를 추출
+VR Hand Tracking Class
+Extract hand data from various VR systems like Quest 3, SteamVR
 """
 
 import time
@@ -9,84 +9,84 @@ from typing import Optional, Dict, Any, Tuple
 import logging
 
 class VRHandTracker:
-    """VR 핸드 트래킹 클래스"""
+    """VR hand tracking class"""
     
     def __init__(self, vr_system: str = "auto", config: Optional[Dict] = None):
         """
-        VR 핸드 트래커 초기화
+        Initialize VR hand tracker
         
         Args:
-            vr_system: VR 시스템 타입 ("steamvr", "quest3", "auto")
-            config: 설정 딕셔너리
+            vr_system: VR system type ("steamvr", "quest3", "auto")
+            config: Configuration dictionary
         """
         self.vr_system = vr_system
         self.config = config or {}
         self.is_connected = False
         self.vr_interface = None
         
-        # 로깅 설정
+        # Logging setup
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
         
-        # VR 시스템 연결 시도
+        # Attempt VR system connection
         self._connect_vr_system()
         
-        # 핸드 데이터 버퍼
+        # Hand data buffer
         self.hand_data_buffer = []
         self.max_buffer_size = 10
         
-        # 마지막 업데이트 시간
+        # Last update time
         self.last_update_time = time.time()
         
     def _connect_vr_system(self):
-        """VR 시스템 연결"""
+        """Connect to VR system"""
         try:
             if self.vr_system == "steamvr" or self.vr_system == "auto":
                 self._connect_steamvr()
             elif self.vr_system == "quest3":
                 self._connect_quest3()
             else:
-                self.logger.warning(f"지원하지 않는 VR 시스템: {self.vr_system}")
+                self.logger.warning(f"Unsupported VR system: {self.vr_system}")
                 
         except Exception as e:
-            self.logger.error(f"VR 시스템 연결 실패: {e}")
+            self.logger.error(f"VR system connection failed: {e}")
             self.is_connected = False
     
     def _connect_steamvr(self):
-        """SteamVR 연결"""
+        """Connect to SteamVR"""
         try:
             import openvr
             self.vr_interface = openvr.init(openvr.VRApplication_Other)
             self.is_connected = True
-            self.logger.info("✅ SteamVR 연결 성공!")
+            self.logger.info("SteamVR connection successful!")
         except ImportError:
-            self.logger.warning("openvr 패키지가 설치되지 않았습니다")
+            self.logger.warning("openvr package is not installed")
             self.is_connected = False
         except Exception as e:
-            self.logger.error(f"SteamVR 연결 실패: {e}")
+            self.logger.error(f"SteamVR connection failed: {e}")
             self.is_connected = False
     
     def _connect_quest3(self):
-        """Quest 3 연결"""
+        """Connect to Quest 3"""
         try:
             import pyopenxr as xr
-            # Quest 3 연결 로직 (구체적 구현은 pyopenxr 문서 참조)
-            self.vr_interface = None  # 임시
+            # Quest 3 connection logic (see pyopenxr documentation for specific implementation)
+            self.vr_interface = None  # Temporary
             self.is_connected = True
-            self.logger.info("✅ Quest 3 연결 성공!")
+            self.logger.info("Quest 3 connection successful!")
         except ImportError:
-            self.logger.warning("pyopenxr 패키지가 설치되지 않았습니다")
+            self.logger.warning("pyopenxr package is not installed")
             self.is_connected = False
         except Exception as e:
-            self.logger.error(f"Quest 3 연결 실패: {e}")
+            self.logger.error(f"Quest 3 connection failed: {e}")
             self.is_connected = False
     
     def get_hand_data(self) -> Optional[np.ndarray]:
         """
-        현재 핸드 데이터 가져오기
+        Get current hand data
         
         Returns:
-            핸드 데이터 (21개 관절, 3D 좌표) 또는 None
+            Hand data (21 joints, 3D coordinates) or None
         """
         if not self.is_connected:
             return self._get_dummy_hand_data()
@@ -100,86 +100,86 @@ class VRHandTracker:
                 return self._get_dummy_hand_data()
                 
         except Exception as e:
-            self.logger.error(f"핸드 데이터 추출 실패: {e}")
+            self.logger.error(f"Hand data extraction failed: {e}")
             return self._get_dummy_hand_data()
     
     def _get_steamvr_hand_data(self) -> np.ndarray:
-        """SteamVR에서 핸드 데이터 추출"""
+        """Extract hand data from SteamVR"""
         try:
-            # SteamVR 핸드 트래킹 데이터 추출
-            # 실제 구현은 SteamVR API 문서 참조
+            # SteamVR hand tracking data extraction
+            # See SteamVR API documentation for actual implementation
             hand_data = np.zeros((21, 3))
             
-            # 더미 데이터 (실제 구현 시 제거)
+            # Dummy data (remove in actual implementation)
             t = time.time()
-            hand_data[0] = [np.sin(t), np.cos(t), 0.0]  # 손목
-            hand_data[1:5] = [np.sin(t*2), np.cos(t*2), 0.1]  # 엄지
-            hand_data[5:9] = [np.sin(t*1.5), np.cos(t*1.5), 0.2]  # 검지
-            hand_data[9:13] = [np.sin(t*1.8), np.cos(t*1.8), 0.3]  # 중지
-            hand_data[13:17] = [np.sin(t*2.2), np.cos(t*2.2), 0.4]  # 약지
-            hand_data[17:21] = [np.sin(t*1.2), np.cos(t*1.2), 0.5]  # 새끼
+            hand_data[0] = [np.sin(t), np.cos(t), 0.0]  # Wrist
+            hand_data[1:5] = [np.sin(t*2), np.cos(t*2), 0.1]  # Thumb
+            hand_data[5:9] = [np.sin(t*1.5), np.cos(t*1.5), 0.2]  # Index
+            hand_data[9:13] = [np.sin(t*1.8), np.cos(t*1.8), 0.3]  # Middle
+            hand_data[13:17] = [np.sin(t*2.2), np.cos(t*2.2), 0.4]  # Ring
+            hand_data[17:21] = [np.sin(t*1.2), np.cos(t*1.2), 0.5]  # Little
             
             return hand_data
             
         except Exception as e:
-            self.logger.error(f"SteamVR 핸드 데이터 추출 실패: {e}")
+            self.logger.error(f"SteamVR hand data extraction failed: {e}")
             return np.zeros((21, 3))
     
     def _get_quest3_hand_data(self) -> np.ndarray:
-        """Quest 3에서 핸드 데이터 추출"""
+        """Extract hand data from Quest 3"""
         try:
-            # Quest 3 핸드 트래킹 데이터 추출
-            # 실제 구현은 pyopenxr 문서 참조
+            # Quest 3 hand tracking data extraction
+            # See pyopenxr documentation for actual implementation
             hand_data = np.zeros((21, 3))
             
-            # 더미 데이터 (실제 구현 시 제거)
+            # Dummy data (remove in actual implementation)
             t = time.time()
-            hand_data[0] = [np.sin(t), np.cos(t), 0.0]  # 손목
-            hand_data[1:5] = [np.sin(t*2), np.cos(t*2), 0.1]  # 엄지
-            hand_data[5:9] = [np.sin(t*1.5), np.cos(t*1.5), 0.2]  # 검지
-            hand_data[9:13] = [np.sin(t*1.8), np.cos(t*1.8), 0.3]  # 중지
-            hand_data[13:17] = [np.sin(t*2.2), np.cos(t*2.2), 0.4]  # 약지
-            hand_data[17:21] = [np.sin(t*1.2), np.cos(t*1.2), 0.5]  # 새끼
+            hand_data[0] = [np.sin(t), np.cos(t), 0.0]  # Wrist
+            hand_data[1:5] = [np.sin(t*2), np.cos(t*2), 0.1]  # Thumb
+            hand_data[5:9] = [np.sin(t*1.5), np.cos(t*1.5), 0.2]  # Index
+            hand_data[9:13] = [np.sin(t*1.8), np.cos(t*1.8), 0.3]  # Middle
+            hand_data[13:17] = [np.sin(t*2.2), np.cos(t*2.2), 0.4]  # Ring
+            hand_data[17:21] = [np.sin(t*1.2), np.cos(t*1.2), 0.5]  # Little
             
             return hand_data
             
         except Exception as e:
-            self.logger.error(f"Quest 3 핸드 데이터 추출 실패: {e}")
+            self.logger.error(f"Quest 3 hand data extraction failed: {e}")
             return np.zeros((21, 3))
     
     def _get_dummy_hand_data(self) -> np.ndarray:
-        """더미 핸드 데이터 생성 (테스트용)"""
+        """Generate dummy hand data (for testing)"""
         t = time.time()
         hand_data = np.zeros((21, 3))
         
-        # 시간에 따라 움직이는 더미 데이터
-        hand_data[0] = [np.sin(t * 0.5) * 0.1, np.cos(t * 0.5) * 0.1, 0.0]  # 손목
-        hand_data[1:5] = [np.sin(t * 2) * 0.05, np.cos(t * 2) * 0.05, 0.1]  # 엄지
-        hand_data[5:9] = [np.sin(t * 1.5) * 0.05, np.cos(t * 1.5) * 0.05, 0.2]  # 검지
-        hand_data[9:13] = [np.sin(t * 1.8) * 0.05, np.cos(t * 1.8) * 0.05, 0.3]  # 중지
-        hand_data[13:17] = [np.sin(t * 2.2) * 0.05, np.cos(t * 2.2) * 0.05, 0.4]  # 약지
-        hand_data[17:21] = [np.sin(t * 1.2) * 0.05, np.cos(t * 1.2) * 0.05, 0.5]  # 새끼
+        # Time-varying dummy data
+        hand_data[0] = [np.sin(t * 0.5) * 0.1, np.cos(t * 0.5) * 0.1, 0.0]  # Wrist
+        hand_data[1:5] = [np.sin(t * 2) * 0.05, np.cos(t * 2) * 0.05, 0.1]  # Thumb
+        hand_data[5:9] = [np.sin(t * 1.5) * 0.05, np.cos(t * 1.5) * 0.05, 0.2]  # Index
+        hand_data[9:13] = [np.sin(t * 1.8) * 0.05, np.cos(t * 1.8) * 0.05, 0.3]  # Middle
+        hand_data[13:17] = [np.sin(t * 2.2) * 0.05, np.cos(t * 2.2) * 0.05, 0.4]  # Ring
+        hand_data[17:21] = [np.sin(t * 1.2) * 0.05, np.cos(t * 1.2) * 0.05, 0.5]  # Little
         
         return hand_data
     
     def get_hand_confidence(self) -> float:
-        """핸드 트래킹 신뢰도 반환"""
+        """Return hand tracking confidence"""
         if not self.is_connected:
             return 0.0
         
-        # 실제 구현에서는 VR 시스템에서 신뢰도 값 가져오기
-        return 0.8  # 더미 값
+        # In actual implementation, get confidence value from VR system
+        return 0.8  # Dummy value
     
     def is_hand_visible(self) -> bool:
-        """핸드가 보이는지 확인"""
+        """Check if hand is visible"""
         if not self.is_connected:
-            return True  # 더미 모드에서는 항상 True
+            return True  # Always True in dummy mode
         
-        # 실제 구현에서는 VR 시스템에서 핸드 가시성 확인
+        # In actual implementation, check hand visibility from VR system
         return True
     
     def get_tracking_status(self) -> Dict[str, Any]:
-        """트래킹 상태 정보 반환"""
+        """Return tracking status information"""
         return {
             "is_connected": self.is_connected,
             "vr_system": self.vr_system,
@@ -190,31 +190,31 @@ class VRHandTracker:
         }
     
     def update(self):
-        """트래커 업데이트"""
+        """Update tracker"""
         current_time = time.time()
         
-        # 핸드 데이터 가져오기
+        # Get hand data
         hand_data = self.get_hand_data()
         
         if hand_data is not None:
-            # 버퍼에 추가
+            # Add to buffer
             self.hand_data_buffer.append({
                 "timestamp": current_time,
                 "data": hand_data.copy()
             })
             
-            # 버퍼 크기 제한
+            # Limit buffer size
             if len(self.hand_data_buffer) > self.max_buffer_size:
                 self.hand_data_buffer.pop(0)
             
             self.last_update_time = current_time
     
     def get_smoothed_hand_data(self, smoothing_factor: float = 0.3) -> Optional[np.ndarray]:
-        """스무딩이 적용된 핸드 데이터 반환"""
+        """Return smoothed hand data"""
         if len(self.hand_data_buffer) < 2:
             return self.get_hand_data()
         
-        # 최근 데이터들의 가중 평균
+        # Weighted average of recent data
         weights = np.exp(np.linspace(-smoothing_factor, 0, len(self.hand_data_buffer)))
         weights = weights / np.sum(weights)
         
@@ -225,20 +225,20 @@ class VRHandTracker:
         return smoothed_data
     
     def disconnect(self):
-        """VR 시스템 연결 해제"""
+        """Disconnect from VR system"""
         try:
             if self.vr_interface:
                 if self.vr_system == "steamvr":
                     import openvr
                     openvr.shutdown()
-                # Quest 3 연결 해제 로직 추가
+                # Add Quest 3 disconnection logic
                 
             self.is_connected = False
-            self.logger.info("VR 시스템 연결 해제 완료")
+            self.logger.info("VR system disconnection completed")
             
         except Exception as e:
-            self.logger.error(f"VR 시스템 연결 해제 실패: {e}")
+            self.logger.error(f"VR system disconnection failed: {e}")
     
     def __del__(self):
-        """소멸자"""
+        """Destructor"""
         self.disconnect()

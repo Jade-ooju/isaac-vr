@@ -1,0 +1,30 @@
+{
+  "task_name": "Isaac-Repose-Cube-Shadow-Direct-v0",
+  "num_demos": 2,
+  "timestamp": "20250903_115531",
+  "vr_system": "demo",
+  "demos": [
+    {
+      "task_name": "Isaac-Repose-Cube-Shadow-Direct-v0",
+      "demo_id": 0,
+      "timestamp": "2025-09-03T11:55:28.820059",
+      "duration": 3.129072904586792,
+      "total_steps": 180,
+      "success": false,
+      "vr_system": "demo",
+      "hand_tracking_confidence": 0.0,
+      "subtask_annotations": []
+    },
+    {
+      "task_name": "Isaac-Repose-Cube-Shadow-Direct-v0",
+      "demo_id": 1,
+      "timestamp": "2025-09-03T11:55:31.902096",
+      "duration": 3.0735230445861816,
+      "total_steps": 180,
+      "success": false,
+      "vr_system": "demo",
+      "hand_tracking_confidence": 0.0,
+      "subtask_annotations": []
+    }
+  ]
+}

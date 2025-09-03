@@ -1,6 +1,6 @@
 """
 Isaac Lab Mimic Integration for VR Teleoperation
-Windows 환경에서 Isaac Lab Mimic과 VR 텔레오퍼레이션을 통합하는 모듈
+Module for integrating Isaac Lab Mimic with VR teleoperation in Windows environment
 """
 
 import os
@@ -10,13 +10,28 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 
-import isaaclab
-from isaaclab.envs import ManagerBasedRLEnv
-from isaaclab.utils.dict import update_dict
+# Isaac Lab imports with error handling
+try:
+    import isaaclab
+    from isaaclab.envs import ManagerBasedRLEnv
+    from isaaclab.utils.dict import update_dict
+    ISAAC_LAB_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Isaac Lab not available: {e}")
+    print("Running in standalone mode without Isaac Lab integration")
+    ISAAC_LAB_AVAILABLE = False
+    # Create dummy classes for standalone mode
+    class ManagerBasedRLEnv:
+        def __init__(self, *args, **kwargs):
+            pass
+        def reset(self):
+            return None, {}
+        def step(self, action):
+            return None, 0, False, {}
 
 @dataclass
 class MimicDemoConfig:
-    """Isaac Lab Mimic 데모 설정"""
+    """Isaac Lab Mimic demo configuration"""
     task_name: str
     num_demos: int = 10
     demo_length: float = 5.0  # seconds
@@ -25,7 +40,7 @@ class MimicDemoConfig:
     
 @dataclass
 class SubTaskConfig:
-    """서브태스크 설정"""
+    """Subtask configuration"""
     name: str
     start_signal: str
     end_signal: str
@@ -33,18 +48,18 @@ class SubTaskConfig:
     interpolation_steps: int = 5
 
 class VRMimicDemoCollector:
-    """VR을 사용한 Isaac Lab Mimic 데모 수집기"""
+    """Isaac Lab Mimic demo collector using VR"""
     
     def __init__(self, config: MimicDemoConfig):
         self.config = config
         self.demo_data = []
         self.current_demo = None
         
-        # 저장 경로 생성
+        # Create save path
         os.makedirs(config.save_path, exist_ok=True)
         
     def start_demo_collection(self, env: ManagerBasedRLEnv):
-        """데모 수집 시작"""
+        """Start demo collection"""
         print(f"Starting demo collection for task: {self.config.task_name}")
         print(f"Target: {self.config.num_demos} demonstrations")
         
@@ -55,8 +70,8 @@ class VRMimicDemoCollector:
         self._save_demos()
         
     def _collect_single_demo(self, env: ManagerBasedRLEnv, demo_idx: int):
-        """단일 데모 수집"""
-        # 환경 리셋
+        """Collect single demo"""
+        # Reset environment
         obs = env.reset()
         
         demo_data = {
@@ -69,18 +84,18 @@ class VRMimicDemoCollector:
         }
         
         step_count = 0
-        max_steps = int(self.config.demo_length * 60)  # 60 Hz 가정
+        max_steps = int(self.config.demo_length * 60)  # Assuming 60 Hz
         
         print("Recording demo... Press 'q' to stop early, 's' to save current demo")
         
         while step_count < max_steps:
-            # VR 입력에서 액션 가져오기 (기존 VR 시스템과 연동)
+            # Get action from VR input (integrate with existing VR system)
             action = self._get_vr_action()
             
-            # 환경 스텝
+            # Environment step
             obs, reward, done, info = env.step(action)
             
-            # 데이터 저장
+            # Save data
             demo_data["observations"].append(obs.copy())
             demo_data["actions"].append(action.copy())
             demo_data["rewards"].append(reward)
@@ -93,31 +108,31 @@ class VRMimicDemoCollector:
             if done:
                 break
                 
-        # 데모 데이터 저장
+        # Save demo data
         self.demo_data.append(demo_data)
         print(f"Demo {demo_idx + 1} completed: {step_count} steps")
         
     def _get_vr_action(self):
-        """VR 입력에서 액션 가져오기 (기존 VR 시스템과 연동)"""
-        # TODO: 기존 VR 시스템과 연동
-        # 현재는 더미 액션 반환
-        return np.zeros(20)  # Shadow Hand 관절 수에 맞춤
+        """Get action from VR input (integrate with existing VR system)"""
+        # TODO: Integrate with existing VR system
+        # Currently returns dummy action
+        return np.zeros(20)  # Match Shadow Hand joint count
         
     def _save_demos(self):
-        """수집된 데모들을 HDF5 형식으로 저장"""
+        """Save collected demos in HDF5 format"""
         save_path = Path(self.config.save_path) / f"{self.config.task_name}_demos.h5"
         
         with h5py.File(save_path, 'w') as f:
-            # 메타데이터 저장
+            # Save metadata
             f.attrs['task_name'] = self.config.task_name
             f.attrs['num_demos'] = len(self.demo_data)
             f.attrs['demo_length'] = self.config.demo_length
             
-            # 각 데모 저장
+            # Save each demo
             for i, demo in enumerate(self.demo_data):
                 demo_group = f.create_group(f'demo_{i}')
                 
-                # 관찰 데이터
+                # Observation data
                 demo_group.create_dataset('observations', 
                                         data=np.array(demo['observations']))
                 demo_group.create_dataset('actions', 

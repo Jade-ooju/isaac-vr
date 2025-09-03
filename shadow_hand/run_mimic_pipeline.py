@@ -1,6 +1,6 @@
 """
-Isaac Lab Mimic 통합 파이프라인 실행 스크립트
-Windows 환경에서 VR 텔레오퍼레이션을 사용한 Isaac Lab Mimic 워크플로우
+Isaac Lab Mimic Integration Pipeline Execution Script
+Isaac Lab Mimic workflow using VR teleoperation in Windows environment
 """
 
 import os
@@ -10,36 +10,43 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-# 프로젝트 루트 경로 추가
+# Add project root path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from mimic_integration import VRMimicDemoCollector, MimicDemoConfig
-from mimic_demo_recorder import MimicDemoRecorder
-from robomimic_integration import RobomimicIntegration
+# Import with error handling
+try:
+    from mimic_integration import VRMimicDemoCollector, MimicDemoConfig
+    from mimic_demo_recorder import MimicDemoRecorder
+    from robomimic_integration import RobomimicIntegration
+    FULL_INTEGRATION_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Full integration not available: {e}")
+    print("Falling back to standalone mode")
+    FULL_INTEGRATION_AVAILABLE = False
 
 class MimicPipeline:
-    """Isaac Lab Mimic 통합 파이프라인"""
+    """Isaac Lab Mimic integration pipeline"""
     
     def __init__(self, config_path: str = None):
         """
-        파이프라인 초기화
+        Initialize pipeline
         
         Args:
-            config_path: 설정 파일 경로
+            config_path: Configuration file path
         """
         self.config_path = config_path
         self._setup_logging()
         self.logger = logging.getLogger(__name__)
         
-        # 컴포넌트 초기화
+        # Component initialization
         self.demo_recorder = None
         self.robomimic_integration = None
         
         self._initialize_components()
     
     def _setup_logging(self):
-        """로깅 설정"""
+        """Setup logging"""
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -50,46 +57,65 @@ class MimicPipeline:
         )
     
     def _initialize_components(self):
-        """컴포넌트 초기화"""
+        """Initialize components"""
         try:
-            # 데모 녹화기 초기화
-            self.demo_recorder = MimicDemoRecorder(config_path=self.config_path)
-            
-            # Robomimic 통합 초기화
-            self.robomimic_integration = RobomimicIntegration()
-            
-            self.logger.info("✅ Isaac Lab Mimic 파이프라인 초기화 완료!")
+            if FULL_INTEGRATION_AVAILABLE:
+                # Initialize demo recorder
+                self.demo_recorder = MimicDemoRecorder(config_path=self.config_path)
+                
+                # Initialize Robomimic integration
+                self.robomimic_integration = RobomimicIntegration()
+                
+                self.logger.info("Isaac Lab Mimic pipeline initialization completed!")
+            else:
+                # Fallback to standalone mode
+                from run_mimic_standalone import StandaloneMimicDemoRecorder
+                self.demo_recorder = StandaloneMimicDemoRecorder(config_path=self.config_path)
+                self.robomimic_integration = None
+                
+                self.logger.info("Standalone mode initialization completed!")
             
         except Exception as e:
-            self.logger.error(f"컴포넌트 초기화 실패: {e}")
+            self.logger.error(f"Component initialization failed: {e}")
             raise
     
     def collect_demos(self, task_name: str, num_demos: int = 5, 
                      duration: float = 10.0, enable_subtask_annotation: bool = True):
         """
-        VR을 사용한 데모 수집
+        Collect demos using VR
         
         Args:
-            task_name: 태스크 이름
-            num_demos: 수집할 데모 수
-            duration: 각 데모의 길이 (초)
-            enable_subtask_annotation: 서브태스크 주석 달기 활성화
+            task_name: Task name
+            num_demos: Number of demos to collect
+            duration: Length of each demo (seconds)
+            enable_subtask_annotation: Enable subtask annotation
         """
-        self.logger.info(f"🎬 데모 수집 시작: {task_name}")
+        self.logger.info(f"Demo collection started: {task_name}")
         
         try:
-            # 데모 수집 실행
-            self.demo_recorder.start_demo_collection(
-                task_name=task_name,
-                num_demos=num_demos,
-                duration=duration,
-                enable_subtask_annotation=enable_subtask_annotation
-            )
+            if FULL_INTEGRATION_AVAILABLE:
+                # Execute demo collection
+                self.demo_recorder.start_demo_collection(
+                    task_name=task_name,
+                    num_demos=num_demos,
+                    duration=duration,
+                    enable_subtask_annotation=enable_subtask_annotation
+                )
+            else:
+                # Standalone mode: generate dummy data
+                demo_data_list = self.demo_recorder.generate_demo_data(
+                    task_name=task_name,
+                    num_demos=num_demos,
+                    duration=duration
+                )
+                
+                # Save dataset
+                self.demo_recorder.save_mimic_dataset(demo_data_list, task_name)
             
-            self.logger.info("✅ 데모 수집 완료!")
+            self.logger.info("Demo collection completed!")
             
         except Exception as e:
-            self.logger.error(f"데모 수집 실패: {e}")
+            self.logger.error(f"Demo collection failed: {e}")
             raise
     
     def convert_to_robomimic(self, mimic_dataset_path: str, output_path: str = None):
@@ -106,12 +132,19 @@ class MimicPipeline:
         self.logger.info(f"🔄 Robomimic 형식으로 변환 중...")
         
         try:
-            # 데이터 변환
-            self.robomimic_integration.convert_to_robomimic_format(
-                mimic_dataset_path=mimic_dataset_path,
-                output_path=output_path,
-                task_name="shadow_hand_manipulation"
-            )
+            if FULL_INTEGRATION_AVAILABLE and self.robomimic_integration:
+                # 데이터 변환
+                self.robomimic_integration.convert_to_robomimic_format(
+                    mimic_dataset_path=mimic_dataset_path,
+                    output_path=output_path,
+                    task_name="shadow_hand_manipulation"
+                )
+            else:
+                # 독립 실행 모드: 직접 변환
+                self.demo_recorder.convert_to_robomimic_format(
+                    mimic_dataset_path=mimic_dataset_path,
+                    output_path=output_path
+                )
             
             self.logger.info(f"✅ 변환 완료: {output_path}")
             return output_path
@@ -243,7 +276,7 @@ class MimicPipeline:
             if self.demo_recorder:
                 self.demo_recorder.cleanup()
             
-            self.logger.info("✅ 파이프라인 정리 완료")
+            self.logger.info("Pipeline cleanup completed")
             
         except Exception as e:
             self.logger.error(f"리소스 정리 중 에러: {e}")

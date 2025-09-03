@@ -1,6 +1,6 @@
 """
-Robomimic 통합 및 정책 훈련 파이프라인
-Isaac Lab Mimic에서 수집한 데이터를 Robomimic 형식으로 변환하고 정책 훈련
+Robomimic Integration and Policy Training Pipeline
+Convert data collected from Isaac Lab Mimic to Robomimic format and train policies
 """
 
 import os
@@ -14,20 +14,20 @@ import subprocess
 import tempfile
 
 class RobomimicIntegration:
-    """Robomimic 통합 클래스"""
+    """Robomimic integration class"""
     
     def __init__(self, robomimic_path: str = None):
         """
-        Robomimic 통합 초기화
+        Initialize Robomimic integration
         
         Args:
-            robomimic_path: Robomimic 설치 경로
+            robomimic_path: Robomimic installation path
         """
         self.robomimic_path = robomimic_path or self._find_robomimic()
         self.logger = logging.getLogger(__name__)
         
         if not self.robomimic_path:
-            self.logger.warning("Robomimic을 찾을 수 없습니다. 수동으로 설치하세요.")
+            self.logger.warning("Robomimic not found. Please install manually.")
     
     def _find_robomimic(self) -> Optional[str]:
         """Robomimic 설치 경로 찾기"""

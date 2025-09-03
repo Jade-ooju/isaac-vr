@@ -1,0 +1,19 @@
+{
+  "task_name": "Isaac-Repose-Cube-Shadow-Direct-v0",
+  "num_demos": 1,
+  "timestamp": "20250903_145853",
+  "vr_system": "demo",
+  "demos": [
+    {
+      "task_name": "Isaac-Repose-Cube-Shadow-Direct-v0",
+      "demo_id": 0,
+      "timestamp": "2025-09-03T14:58:53.863993",
+      "duration": 2.053014039993286,
+      "total_steps": 120,
+      "success": false,
+      "vr_system": "demo",
+      "hand_tracking_confidence": 0.0,
+      "subtask_annotations": []
+    }
+  ]
+}

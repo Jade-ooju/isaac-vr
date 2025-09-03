@@ -1,6 +1,6 @@
 """
-Shadow Hand 제어 클래스
-Isaac Sim 환경에서 Shadow Hand를 직접 제어
+Shadow Hand Control Class
+Directly control Shadow Hand in Isaac Sim environment
 """
 
 import time
@@ -10,36 +10,36 @@ import logging
 import gymnasium as gym
 
 class ShadowHandController:
-    """Shadow Hand 제어 클래스"""
+    """Shadow Hand control class"""
     
     def __init__(self, environment_name: str = "Isaac-Repose-Cube-Shadow-Direct-v0"):
         """
-        Shadow Hand 컨트롤러 초기화
+        Initialize Shadow Hand controller
         
         Args:
-            environment_name: IsaacLab 환경 이름
+            environment_name: IsaacLab environment name
         """
         self.environment_name = environment_name
         self.env = None
         self.robot = None
         self.is_initialized = False
         
-        # 로깅 설정
+        # Logging setup
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
         
-        # 관절 제한 범위 (라디안)
+        # Joint limit ranges (radians)
         self.joint_limits = {
             "wrist": [-0.5, 0.5],      # WRJ0, WRJ1
             "thumb": [-0.8, 0.8],      # THJ0-4
             "fingers": [-1.57, 1.57]   # FFJ, MFJ, RFJ, LFJ
         }
         
-        # 현재 관절 상태
+        # Current joint state
         self.current_joint_positions = np.zeros(20)
         self.target_joint_positions = np.zeros(20)
         
-        # 제어 설정
+        # Control settings
         self.control_config = {
             "enable_ik": True,
             "damping_factor": 0.1,
@@ -48,105 +48,105 @@ class ShadowHandController:
             "position_tolerance": 0.01  # rad
         }
         
-        # 환경 초기화
+        # Environment initialization
         self._initialize_environment()
     
     def _initialize_environment(self):
-        """IsaacLab 환경 초기화"""
+        """Initialize IsaacLab environment"""
         try:
-            self.logger.info(f"환경 초기화 중: {self.environment_name}")
+            self.logger.info(f"Initializing environment: {self.environment_name}")
             
-            # 환경 생성 (Isaac Sim 없이도 실행 가능하도록)
+            # Create environment (can run without Isaac Sim)
             try:
-                # IsaacLab 환경 등록 시도
+                # Attempt IsaacLab environment registration
                 import isaaclab
                 import isaaclab_tasks
-                self.logger.info("✅ IsaacLab 환경 등록 완료!")
+                self.logger.info("IsaacLab environment registration completed!")
                 
-                # IsaacLab 환경인 경우
+                # For IsaacLab environments
                 if "Isaac-" in self.environment_name:
                     if "Shadow" in self.environment_name:
-                        # Shadow Hand 환경
+                        # Shadow Hand environment
                         from isaaclab_tasks.direct.shadow_hand.shadow_hand_env import ShadowHandEnvCfg
                         self.env = gym.make(self.environment_name, cfg=ShadowHandEnvCfg())
                     elif "Cartpole" in self.environment_name:
-                        # Cartpole 환경
+                        # Cartpole environment
                         from isaaclab_tasks.direct.cartpole.cartpole_env import CartpoleEnvCfg
                         self.env = gym.make(self.environment_name, cfg=CartpoleEnvCfg())
                     else:
-                        # 기타 IsaacLab 환경
+                        # Other IsaacLab environments
                         self.env = gym.make(self.environment_name)
                 else:
-                    # 일반 gymnasium 환경인 경우
+                    # For general gymnasium environments
                     self.env = gym.make(self.environment_name)
-                self.logger.info("✅ IsaacLab 환경 생성 성공!")
+                self.logger.info("IsaacLab environment creation successful!")
                 
             except ImportError as e:
-                # Isaac Sim이 없는 경우 일반 gymnasium 환경 사용
-                self.logger.warning(f"Isaac Sim을 찾을 수 없습니다: {e}")
-                self.logger.info("일반 gymnasium 환경을 사용합니다.")
+                # Use general gymnasium environment if Isaac Sim is not available
+                self.logger.warning(f"Isaac Sim not found: {e}")
+                self.logger.info("Using general gymnasium environment.")
                 self.env = gym.make(self.environment_name)
-                self.logger.info("✅ 일반 gymnasium 환경 생성 성공!")
+                self.logger.info("General gymnasium environment creation successful!")
             
-            # 환경 리셋하여 Isaac Sim 윈도우에 로드
+            # Reset environment to load into Isaac Sim window
             obs, info = self.env.reset()
-            self.logger.info("✅ Isaac Sim 윈도우에 환경 로드 완료!")
+            self.logger.info("Environment loaded into Isaac Sim window!")
             
-            # Shadow Hand 객체 찾기
+            # Find Shadow Hand object
             self.robot = self._find_shadow_hand()
             
             if self.robot is not None:
                 self.is_initialized = True
-                self.logger.info("✅ Shadow Hand 객체 찾기 성공!")
+                self.logger.info("Shadow Hand object found successfully!")
                 
-                # 초기 관절 상태 가져오기
+                # Get initial joint state
                 self._update_current_state()
                 
             else:
-                self.logger.error("❌ Shadow Hand 객체를 찾을 수 없습니다")
+                self.logger.error("Shadow Hand object not found")
                 self.is_initialized = False
                 
         except Exception as e:
-            self.logger.error(f"환경 초기화 실패: {e}")
+            self.logger.error(f"Environment initialization failed: {e}")
             self.is_initialized = False
     
     def _find_shadow_hand(self):
-        """환경에서 Shadow Hand 객체 찾기"""
+        """Find Shadow Hand object in environment"""
         if self.env is None:
             return None
         
-        # 여러 방법으로 Shadow Hand 객체 찾기 시도
+        # Try multiple methods to find Shadow Hand object
         robot_candidates = []
         
-        # 1. 직접 robot 속성 확인
+        # 1. Check direct robot attribute
         if hasattr(self.env, 'robot'):
             robot_candidates.append(('env.robot', self.env.robot))
         
-        # 2. _env 속성 확인
+        # 2. Check _env attribute
         if hasattr(self.env, '_env'):
             if hasattr(self.env._env, 'robot'):
                 robot_candidates.append(('env._env.robot', self.env._env.robot))
         
-        # 3. env 속성 확인
+        # 3. Check env attribute
         if hasattr(self.env, 'env'):
             if hasattr(self.env.env, 'robot'):
                 robot_candidates.append(('env.env.robot', self.env.env.robot))
         
-        # 4. 환경 구조 출력 (디버깅용)
+        # 4. Print environment structure (for debugging)
         if not robot_candidates:
-            self.logger.info("환경 구조 분석:")
+            self.logger.info("Environment structure analysis:")
             self._print_environment_structure(self.env)
         
-        # 첫 번째 후보 반환
+        # Return first candidate
         if robot_candidates:
             name, robot = robot_candidates[0]
-            self.logger.info(f"Shadow Hand 객체 발견: {name}")
+            self.logger.info(f"Shadow Hand object found: {name}")
             return robot
         
         return None
     
     def _print_environment_structure(self, env, max_depth=3, current_depth=0):
-        """환경 구조를 출력 (디버깅용)"""
+        """Print environment structure (for debugging)"""
         if current_depth >= max_depth:
             return
         
@@ -163,115 +163,115 @@ class ShadowHandController:
                     pass
     
     def _update_current_state(self):
-        """현재 관절 상태 업데이트"""
+        """Update current joint state"""
         if self.robot is None:
             return
         
         try:
-            # 현재 관절 위치 가져오기
+            # Get current joint positions
             if hasattr(self.robot, 'data') and hasattr(self.robot.data, 'joint_pos'):
                 self.current_joint_positions = self.robot.data.joint_pos.clone().cpu().numpy()
             elif hasattr(self.robot, 'get_joint_positions'):
                 self.current_joint_positions = self.robot.get_joint_positions()
             else:
-                self.logger.warning("관절 위치를 가져올 수 없습니다")
+                self.logger.warning("Cannot get joint positions")
                 
         except Exception as e:
-            self.logger.error(f"현재 상태 업데이트 실패: {e}")
+            self.logger.error(f"Current state update failed: {e}")
     
     def update_hand(self, hand_data: np.ndarray, smoothing: bool = True) -> bool:
         """
-        VR 핸드 데이터로 Shadow Hand 업데이트
+        Update Shadow Hand with VR hand data
         
         Args:
-            hand_data: VR 핸드 데이터 (21개 관절, 3D 좌표)
-            smoothing: 스무딩 적용 여부
+            hand_data: VR hand data (21 joints, 3D coordinates)
+            smoothing: Whether to apply smoothing
             
         Returns:
-            업데이트 성공 여부
+            Update success status
         """
         if not self.is_initialized:
-            self.logger.error("컨트롤러가 초기화되지 않았습니다")
+            self.logger.error("Controller not initialized")
             return False
         
         try:
-            # VR 데이터를 Shadow Hand 관절 위치로 변환
+            # Convert VR data to Shadow Hand joint positions
             joint_positions = self._convert_hand_data_to_joints(hand_data)
             
-            # 관절 제한 범위 적용
+            # Apply joint limits
             joint_positions = self._apply_joint_limits(joint_positions)
             
-            # 스무딩 적용
+            # Apply smoothing
             if smoothing:
                 joint_positions = self._apply_smoothing(joint_positions)
             
-            # Shadow Hand 업데이트
+            # Update Shadow Hand
             success = self._set_joint_positions(joint_positions)
             
             if success:
                 self.target_joint_positions = joint_positions.copy()
-                self.logger.debug(f"핸드 업데이트 성공: {joint_positions[:5]}...")
+                self.logger.debug(f"Hand update successful: {joint_positions[:5]}...")
             
             return success
             
         except Exception as e:
-            self.logger.error(f"핸드 업데이트 실패: {e}")
+            self.logger.error(f"Hand update failed: {e}")
             return False
     
     def _convert_hand_data_to_joints(self, hand_data: np.ndarray) -> np.ndarray:
         """
-        VR 핸드 데이터를 Shadow Hand 관절 위치로 변환
+        Convert VR hand data to Shadow Hand joint positions
         
         Args:
-            hand_data: VR 핸드 데이터 (21개 관절, 3D 좌표)
+            hand_data: VR hand data (21 joints, 3D coordinates)
             
         Returns:
-            Shadow Hand 관절 위치 (20개 관절)
+            Shadow Hand joint positions (20 joints)
         """
-        # 간단한 변환: 3D 위치를 관절 각도로 변환
-        # 실제 구현에서는 더 정교한 변환 로직 필요
+        # Simple conversion: Convert 3D positions to joint angles
+        # More sophisticated conversion logic needed in actual implementation
         
         joint_positions = np.zeros(20)
         
-        # 손목 관절 (WRJ0, WRJ1)
-        joint_positions[17:19] = hand_data[0:2, 0] * 0.1  # X 좌표를 각도로
+        # Wrist joints (WRJ0, WRJ1)
+        joint_positions[17:19] = hand_data[0:2, 0] * 0.1  # X coordinates to angles
         
-        # 엄지 관절 (THJ0-4)
-        joint_positions[0:5] = hand_data[1:6, 1] * 0.1  # Y 좌표를 각도로
+        # Thumb joints (THJ0-4)
+        joint_positions[0:5] = hand_data[1:6, 1] * 0.1  # Y coordinates to angles
         
-        # 검지 관절 (FFJ1-3)
-        joint_positions[5:8] = hand_data[5:8, 2] * 0.1  # Z 좌표를 각도로
+        # Index finger joints (FFJ1-3)
+        joint_positions[5:8] = hand_data[5:8, 2] * 0.1  # Z coordinates to angles
         
-        # 중지 관절 (MFJ1-3)
+        # Middle finger joints (MFJ1-3)
         joint_positions[8:11] = hand_data[9:12, 1] * 0.1
         
-        # 약지 관절 (RFJ1-3)
+        # Ring finger joints (RFJ1-3)
         joint_positions[11:14] = hand_data[13:16, 2] * 0.1
         
-        # 새끼 관절 (LFJ1-3)
+        # Little finger joints (LFJ1-3)
         joint_positions[14:17] = hand_data[17:20, 0] * 0.1
         
         return joint_positions
     
     def _apply_joint_limits(self, joint_positions: np.ndarray) -> np.ndarray:
-        """관절 제한 범위 적용"""
+        """Apply joint limit ranges"""
         limited_positions = joint_positions.copy()
         
-        # 손목 관절 제한
+        # Wrist joint limits
         limited_positions[17:19] = np.clip(
             limited_positions[17:19], 
             self.joint_limits["wrist"][0], 
             self.joint_limits["wrist"][1]
         )
         
-        # 엄지 관절 제한
+        # Thumb joint limits
         limited_positions[0:5] = np.clip(
             limited_positions[0:5], 
             self.joint_limits["thumb"][0], 
             self.joint_limits["thumb"][1]
         )
         
-        # 손가락 관절 제한
+        # Finger joint limits
         limited_positions[5:17] = np.clip(
             limited_positions[5:17], 
             self.joint_limits["fingers"][0], 
@@ -281,7 +281,7 @@ class ShadowHandController:
         return limited_positions
     
     def _apply_smoothing(self, target_positions: np.ndarray) -> np.ndarray:
-        """관절 위치에 스무딩 적용"""
+        """Apply smoothing to joint positions"""
         smoothing_factor = 0.3
         
         smoothed_positions = (
@@ -292,82 +292,82 @@ class ShadowHandController:
         return smoothed_positions
     
     def _set_joint_positions(self, joint_positions: np.ndarray) -> bool:
-        """Shadow Hand 관절 위치 설정"""
+        """Set Shadow Hand joint positions"""
         if self.robot is None:
             return False
         
         try:
-            # 관절 위치 설정
+            # Set joint positions
             if hasattr(self.robot, 'set_joint_position_target'):
                 self.robot.set_joint_position_target(joint_positions)
             elif hasattr(self.robot, 'set_joint_positions'):
                 self.robot.set_joint_positions(joint_positions)
             else:
-                self.logger.warning("관절 위치 설정 메서드를 찾을 수 없습니다")
+                self.logger.warning("Joint position setting method not found")
                 return False
             
-            # 시뮬레이션에 데이터 쓰기
+            # Write data to simulation
             if hasattr(self.robot, 'write_data_to_sim'):
                 self.robot.write_data_to_sim()
             
-            # 현재 상태 업데이트
+            # Update current state
             self.current_joint_positions = joint_positions.copy()
             
             return True
             
         except Exception as e:
-            self.logger.error(f"관절 위치 설정 실패: {e}")
+            self.logger.error(f"Joint position setting failed: {e}")
             return False
     
     def get_joint_positions(self) -> np.ndarray:
-        """현재 관절 위치 반환"""
+        """Return current joint positions"""
         return self.current_joint_positions.copy()
     
     def get_joint_limits(self) -> Dict[str, List[float]]:
-        """관절 제한 범위 반환"""
+        """Return joint limit ranges"""
         return self.joint_limits.copy()
     
     def reset_hand(self):
-        """Shadow Hand를 초기 위치로 리셋"""
+        """Reset Shadow Hand to initial position"""
         if not self.is_initialized:
             return False
         
         try:
-            # 초기 관절 위치 (모든 관절 0도)
+            # Initial joint positions (all joints at 0 degrees)
             initial_positions = np.zeros(20)
             
-            # 리셋
+            # Reset
             success = self._set_joint_positions(initial_positions)
             
             if success:
-                self.logger.info("✅ Shadow Hand 리셋 완료")
+                self.logger.info("Shadow Hand reset completed")
             
             return success
             
         except Exception as e:
-            self.logger.error(f"Shadow Hand 리셋 실패: {e}")
+            self.logger.error(f"Shadow Hand reset failed: {e}")
             return False
     
     def step_environment(self):
-        """환경 스텝 실행"""
+        """Execute environment step"""
         if self.env is None:
             return False
         
         try:
-            # 환경 스텝 실행
+            # Execute environment step
             if hasattr(self.env, 'step'):
                 self.env.step(None)
                 return True
             else:
-                self.logger.warning("환경 step 메서드를 찾을 수 없습니다")
+                self.logger.warning("Environment step method not found")
                 return False
                 
         except Exception as e:
-            self.logger.error(f"환경 스텝 실행 실패: {e}")
+            self.logger.error(f"Environment step execution failed: {e}")
             return False
     
     def close(self):
-        """컨트롤러 정리"""
+        """Cleanup controller"""
         try:
             if self.env:
                 self.env.close()
@@ -376,11 +376,11 @@ class ShadowHandController:
             self.robot = None
             self.is_initialized = False
             
-            self.logger.info("✅ Shadow Hand 컨트롤러 정리 완료")
+            self.logger.info("Shadow Hand controller cleanup completed")
             
         except Exception as e:
-            self.logger.error(f"컨트롤러 정리 실패: {e}")
+            self.logger.error(f"Controller cleanup failed: {e}")
     
     def __del__(self):
-        """소멸자"""
+        """Destructor"""
         self.close()

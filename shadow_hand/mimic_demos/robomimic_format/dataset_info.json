@@ -1,0 +1,37 @@
+{
+  "env": "shadow_hand_manipulation",
+  "type": 1,
+  "version": "1.0.0",
+  "n_demos": 3,
+  "n_episodes": 3,
+  "n_steps": 0,
+  "env_kwargs": {
+    "env_name": "shadow_hand_manipulation",
+    "render": false,
+    "render_camera": "frontview",
+    "ignore_done": true,
+    "use_image_obs": false,
+    "reward_shaping": true
+  },
+  "env_meta": {
+    "env_name": "shadow_hand_manipulation",
+    "type": "Manipulation",
+    "env_version": "1.0.0",
+    "codebase": "isaac_lab_mimic"
+  },
+  "data": {
+    "action_keys": [
+      "robot0_eef_pos",
+      "robot0_eef_quat",
+      "robot0_gripper_qpos"
+    ],
+    "obs_keys": [
+      "robot0_eef_pos",
+      "robot0_eef_quat",
+      "robot0_gripper_qpos",
+      "object"
+    ],
+    "n_actions": 8,
+    "n_obs": 12
+  }
+}

@@ -267,3 +267,4 @@ python run_mimic_pipeline.py --action full --task "your_task" --config configs/t
 4. **Python 환경**: 패키지 설치 및 버전 확인
 
 추가 지원이 필요한 경우 GitHub Issues를 통해 문의하세요.
+
