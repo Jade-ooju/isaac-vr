@@ -1,4 +1,4 @@
-# 텔레오퍼레이션 설정 파일
+# Isaac Lab Mimic 통합 텔레오퍼레이션 설정 파일
 
 # VR 설정
 vr_tracker:
@@ -52,6 +52,34 @@ visualization:
   
   # 성능 모니터링
   show_performance_stats: true
+
+# Isaac Lab Mimic 설정
+mimic:
+  # 데모 저장 경로
+  save_path: "./mimic_demos/"
+  
+  # 기본 데모 길이 (초)
+  default_duration: 10.0
+  
+  # 서브태스크 주석 달기 활성화
+  subtask_annotation: true
+  
+  # 성공 기준
+  success_criteria:
+    min_confidence: 0.7
+    min_duration: 2.0
+  
+  # Robomimic 통합 설정
+  robomimic:
+    # Robomimic 설치 경로 (자동 감지 시 None)
+    install_path: null
+    
+    # 훈련 설정
+    training:
+      algo_name: "bc"  # Behavior Cloning
+      num_epochs: 400
+      learning_rate: 1e-4
+      batch_size: 32
 
 # 디버깅 설정
 debug:
