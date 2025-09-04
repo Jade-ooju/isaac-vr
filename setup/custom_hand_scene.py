@@ -125,7 +125,6 @@ class VRHandMotionSequence:
         file_path = self.dataset_path / motion_file
         
         try:
-            print(f"[DEBUG]: Loading motion: {motion_file}")
             with open(file_path, 'r', encoding='utf-8-sig') as f:
                 content = f.read()
                 if len(content) == 0:
@@ -134,7 +133,6 @@ class VRHandMotionSequence:
                 
                 self.motion_data = json.loads(content)
                 total_frames = len(self.motion_data.get('frames', []))
-                print(f"[DEBUG]: Successfully loaded JSON with {total_frames} frames")
                 
                 # Calculate frame skip to achieve target duration
                 if total_frames > 0:
@@ -219,19 +217,18 @@ class VRHandMotionSequence:
         positions = []
         joint_dict = {joint["jointName"]: joint for joint in frame_data["joints"]}
         
-        print(f"[DEBUG]: Found {len(joint_dict)} joints in frame data")
-        print(f"[DEBUG]: Available joint names: {list(joint_dict.keys())}")
-        
         for joint_name in self.joint_names:
             if joint_name in joint_dict:
                 pos = joint_dict[joint_name]["position"]
-                positions.append([pos["x"], pos["y"], pos["z"]])
-                if joint_name == "Wrist":  # Debug first joint
-                    print(f"[DEBUG]: {joint_name} position: x={pos['x']}, y={pos['y']}, z={pos['z']}")
+                # Convert from Unity coordinate system to Isaac Sim coordinate system
+                # Unity: X=Right, Y=Up, Z=Forward (Left-handed)
+                # Isaac Sim: X=Forward, Y=Left, Z=Up (Right-handed)
+                # Conversion: Unity(x,y,z) -> Isaac Sim(z,-x,y)
+                isaac_pos = [pos["z"], -pos["x"], pos["y"]]
+                positions.append(isaac_pos)
             else:
                 # If joint not found, use zero position
                 positions.append([0.0, 0.0, 0.0])
-                print(f"[DEBUG]: Joint {joint_name} not found, using zero position")
                 
         return torch.tensor(positions, dtype=torch.float32)
     
@@ -275,8 +272,300 @@ class VRHandMotionSequence:
         return f"Group: {self.current_group} | Motion: {motion_file} | Frames: {num_frames} (skip: {self.frame_skip}) | Target: {interaction_target} | Frame: {self.current_frame_index + 1}/{effective_frames}"
 
 
+class VRToShadowHandIK:
+    """Inverse Kinematics solver for mapping VR hand data to Shadow Hand joint angles."""
+    
+    def __init__(self):
+        """Initialize the IK solver with joint mappings and limits."""
+        # Shadow Hand joint names (24 joints - includes additional joints)
+        self.shadow_joint_names = [
+            "robot0_WRJ1", "robot0_WRJ0",  # Wrist (2)
+            "robot0_FFJ3", "robot0_FFJ2", "robot0_FFJ1",  # Index (3)
+            "robot0_MFJ3", "robot0_MFJ2", "robot0_MFJ1",  # Middle (3)
+            "robot0_RFJ3", "robot0_RFJ2", "robot0_RFJ1",  # Ring (3)
+            "robot0_LFJ4", "robot0_LFJ3", "robot0_LFJ2", "robot0_LFJ1",  # Little (4)
+            "robot0_THJ4", "robot0_THJ3", "robot0_THJ2", "robot0_THJ1", "robot0_THJ0",  # Thumb (5)
+            "robot0_FFJ0", "robot0_MFJ0", "robot0_RFJ0", "robot0_LFJ0"  # Additional joints (4)
+        ]
+        
+        # Joint limits (radians) - conservative limits for safety
+        self.joint_limits = torch.tensor([
+            [-0.5, 0.5], [-0.5, 0.5],  # Wrist
+            [-1.57, 1.57], [-1.57, 1.57], [-1.57, 1.57],  # Index
+            [-1.57, 1.57], [-1.57, 1.57], [-1.57, 1.57],  # Middle
+            [-1.57, 1.57], [-1.57, 1.57], [-1.57, 1.57],  # Ring
+            [-1.57, 1.57], [-1.57, 1.57], [-1.57, 1.57], [-1.57, 1.57],  # Little
+            [-0.8, 0.8], [-0.8, 0.8], [-0.8, 0.8], [-0.8, 0.8], [-0.8, 0.8],  # Thumb
+            [-1.57, 1.57], [-1.57, 1.57], [-1.57, 1.57], [-1.57, 1.57]  # Additional joints
+        ])
+        
+        # VR joint to Shadow Hand finger mapping
+        self.finger_mappings = {
+            "thumb": {
+                "vr_joints": ["ThumbMetacarpal", "ThumbProximal", "ThumbDistal", "ThumbTip"],
+                "shadow_joints": [16, 17, 18, 19, 20],  # THJ0-4 indices
+                "base_joint": "Palm"
+            },
+            "index": {
+                "vr_joints": ["IndexMetacarpal", "IndexProximal", "IndexIntermediate", "IndexDistal", "IndexTip"],
+                "shadow_joints": [5, 6, 7],  # FFJ1-3 indices
+                "base_joint": "Palm"
+            },
+            "middle": {
+                "vr_joints": ["MiddleMetacarpal", "MiddleProximal", "MiddleIntermediate", "MiddleDistal", "MiddleTip"],
+                "shadow_joints": [8, 9, 10],  # MFJ1-3 indices
+                "base_joint": "Palm"
+            },
+            "ring": {
+                "vr_joints": ["RingMetacarpal", "RingProximal", "RingIntermediate", "RingDistal", "RingTip"],
+                "shadow_joints": [11, 12, 13],  # RFJ1-3 indices
+                "base_joint": "Palm"
+            },
+            "little": {
+                "vr_joints": ["PinkyMetacarpal", "PinkyProximal", "PinkyIntermediate", "PinkyDistal", "PinkyTip"],
+                "shadow_joints": [14, 15, 16, 17],  # LFJ1-4 indices
+                "base_joint": "Palm"
+            }
+        }
+        
+        # Previous joint positions for smoothing
+        self.prev_joint_positions = torch.zeros(24)
+        self.smoothing_factor = 0.3
+        
+        # VR wrist position for direct mapping
+        self.vr_wrist_position = None
+    
+    def solve_ik(self, vr_joint_positions: torch.Tensor, vr_joint_names: list) -> torch.Tensor:
+        """Solve IK to convert VR joint positions to Shadow Hand joint angles.
+        Focus on wrist movement first, then simple finger mapping.
+        
+        Args:
+            vr_joint_positions: Tensor of shape (num_joints, 3) with VR joint positions
+            vr_joint_names: List of VR joint names corresponding to positions
+            
+        Returns:
+            Tensor of shape (24,) with Shadow Hand joint angles
+        """
+        # Create joint position dictionary
+        joint_dict = {name: pos for name, pos in zip(vr_joint_names, vr_joint_positions)}
+        
+        # Initialize result
+        shadow_joint_angles = torch.zeros(24)
+        
+        # Step 1: Map wrist position directly to robot0_wrist
+        wrist_success = self._map_wrist_position_direct(joint_dict)
+        if not wrist_success:
+            # Fallback to angle-based mapping if direct mapping fails
+            wrist_angles = self._map_wrist_movement(joint_dict)
+            shadow_joint_angles[0] = wrist_angles[0]  # WRJ1
+            shadow_joint_angles[1] = wrist_angles[1]  # WRJ0
+        
+        # Step 2: Simple finger mapping based on VR joint positions
+        finger_angles = self._map_fingers_simple(joint_dict)
+        shadow_joint_angles[2:22] = finger_angles  # Finger joints (20 joints)
+        
+        # Step 3: Set additional joints to zero for now
+        shadow_joint_angles[22:24] = 0.0  # Additional joints
+        
+        # Apply joint limits
+        shadow_joint_angles = self._apply_joint_limits(shadow_joint_angles)
+        
+        # Apply smoothing
+        shadow_joint_angles = self._apply_smoothing(shadow_joint_angles)
+        
+        # Update previous positions
+        self.prev_joint_positions = shadow_joint_angles.clone()
+        
+        return shadow_joint_angles
+    
+    def _map_wrist_position_direct(self, joint_dict: dict) -> bool:
+        """Map VR ForearmWrist position directly to robot0_wrist position.
+        
+        Args:
+            joint_dict: Dictionary mapping VR joint names to positions
+            
+        Returns:
+            bool: True if mapping was successful, False otherwise
+        """
+        # Look for ForearmWrist in VR data
+        forearm_wrist_pos = None
+        forearm_wrist_candidates = ["ForearmWrist", "forearmWrist", "Forearm", "forearm"]
+        
+        for candidate in forearm_wrist_candidates:
+            if candidate in joint_dict:
+                forearm_wrist_pos = joint_dict[candidate]
+                break
+        
+        if forearm_wrist_pos is None:
+            return False
+        
+        # Apply position directly to robot0_wrist
+        # This would require access to the robot's wrist prim
+        # For now, we'll store the position for later use
+        self.vr_wrist_position = forearm_wrist_pos.clone()
+        
+        return True
+    
+    def _map_wrist_movement(self, joint_dict: dict) -> torch.Tensor:
+        """Map VR wrist movement to Shadow Hand wrist joints.
+        
+        Args:
+            joint_dict: Dictionary mapping VR joint names to positions
+            
+        Returns:
+            Tensor of shape (2,) with wrist joint angles [WRJ1, WRJ0]
+        """
+        # Try to find wrist and palm positions with different possible names
+        wrist_pos = None
+        palm_pos = None
+        
+        # Look for wrist position with various possible names
+        wrist_candidates = ["Wrist", "wrist", "Hand", "hand", "HandCenter", "handCenter"]
+        for candidate in wrist_candidates:
+            if candidate in joint_dict:
+                wrist_pos = joint_dict[candidate]
+                break
+        
+        # Look for palm position with various possible names  
+        palm_candidates = ["Palm", "palm", "HandCenter", "handCenter", "HandPalm", "handPalm"]
+        for candidate in palm_candidates:
+            if candidate in joint_dict:
+                palm_pos = joint_dict[candidate]
+                break
+        
+        # If we can't find wrist or palm, use first available joint as reference
+        if wrist_pos is None or palm_pos is None:
+            available_joints = list(joint_dict.keys())
+            if available_joints:
+                ref_joint = joint_dict[available_joints[0]]
+                if wrist_pos is None:
+                    wrist_pos = ref_joint
+                if palm_pos is None:
+                    palm_pos = ref_joint
+        
+        # Fallback to zero if still no positions found
+        if wrist_pos is None:
+            wrist_pos = torch.zeros(3)
+        if palm_pos is None:
+            palm_pos = torch.zeros(3)
+        
+        # Calculate wrist orientation relative to palm
+        # WRJ1: Pitch (up/down movement)
+        # WRJ0: Yaw (left/right movement)
+        
+        wrist_angles = torch.zeros(2)
+        
+        # Map Z difference to pitch (WRJ1)
+        z_diff = wrist_pos[2] - palm_pos[2]
+        wrist_angles[0] = torch.clamp(z_diff * 5.0, -0.5, 0.5)  # WRJ1 - increased sensitivity
+        
+        # Map Y difference to yaw (WRJ0)  
+        y_diff = wrist_pos[1] - palm_pos[1]
+        wrist_angles[1] = torch.clamp(y_diff * 5.0, -0.5, 0.5)  # WRJ0 - increased sensitivity
+        
+        return wrist_angles
+    
+    def _map_fingers_simple(self, joint_dict: dict) -> torch.Tensor:
+        """Simple finger mapping based on VR joint positions.
+        
+        Args:
+            joint_dict: Dictionary mapping VR joint names to positions
+            
+        Returns:
+            Tensor of shape (20,) with finger joint angles
+        """
+        finger_angles = torch.zeros(20)
+        
+        # Get palm position as reference
+        palm_pos = joint_dict.get("Palm", torch.zeros(3))
+        
+        # Map each finger based on tip position relative to palm
+        finger_mappings = {
+            "IndexTip": [2, 3, 4],      # FFJ1, FFJ2, FFJ3
+            "MiddleTip": [5, 6, 7],     # MFJ1, MFJ2, MFJ3  
+            "RingTip": [8, 9, 10],      # RFJ1, RFJ2, RFJ3
+            "PinkyTip": [11, 12, 13, 14], # LFJ1, LFJ2, LFJ3, LFJ4
+            "ThumbTip": [15, 16, 17, 18, 19]  # THJ0, THJ1, THJ2, THJ3, THJ4
+        }
+        
+        for tip_name, joint_indices in finger_mappings.items():
+            if tip_name in joint_dict:
+                tip_pos = joint_dict[tip_name]
+                
+                # Calculate distance from palm
+                distance = torch.norm(tip_pos - palm_pos)
+                
+                # Map distance to finger curl (simple linear mapping)
+                # Closer to palm = more curled (positive angle)
+                # Further from palm = less curled (negative angle)
+                curl_angle = torch.clamp((0.1 - distance) * 10.0, -1.57, 1.57)
+                
+                # Apply to all joints of this finger
+                for joint_idx in joint_indices:
+                    if joint_idx < 20:
+                        finger_angles[joint_idx] = curl_angle
+        
+        return finger_angles
+    
+    def _solve_finger_ik(self, joint_dict: dict, mapping: dict, finger_name: str) -> torch.Tensor:
+        """Solve IK for a single finger.
+        
+        Args:
+            joint_dict: Dictionary mapping VR joint names to positions
+            mapping: Finger mapping configuration
+            
+        Returns:
+            Tensor with finger joint angles
+        """
+        vr_joints = mapping["vr_joints"]
+        base_joint = mapping["base_joint"]
+        
+        # Get base position
+        if base_joint not in joint_dict:
+            return torch.zeros(len(mapping["shadow_joints"]))
+        
+        base_pos = joint_dict[base_joint]
+        finger_angles = []
+        
+        # Calculate angles for each joint segment
+        for i in range(len(vr_joints) - 1):
+            if vr_joints[i] in joint_dict and vr_joints[i + 1] in joint_dict:
+                # Get joint positions
+                joint1_pos = joint_dict[vr_joints[i]]
+                joint2_pos = joint_dict[vr_joints[i + 1]]
+                
+                # Calculate direction vector
+                direction = joint2_pos - joint1_pos
+                
+                # Convert to angle (simplified 2D projection)
+                if finger_name == "thumb":
+                    # Thumb has different angle calculation
+                    angle = torch.atan2(direction[1], direction[0])
+                else:
+                    # Other fingers: use Z component for flexion
+                    angle = torch.atan2(direction[2], torch.norm(direction[:2]))
+                
+                finger_angles.append(angle.item())
+            else:
+                finger_angles.append(0.0)
+        
+        return torch.tensor(finger_angles)
+    
+    def _apply_joint_limits(self, joint_angles: torch.Tensor) -> torch.Tensor:
+        """Apply joint limits to prevent unsafe positions."""
+        for i in range(len(joint_angles)):
+            joint_angles[i] = torch.clamp(joint_angles[i], 
+                                        self.joint_limits[i][0], 
+                                        self.joint_limits[i][1])
+        return joint_angles
+    
+    def _apply_smoothing(self, joint_angles: torch.Tensor) -> torch.Tensor:
+        """Apply smoothing to prevent jerky movements."""
+        return (1 - self.smoothing_factor) * joint_angles + self.smoothing_factor * self.prev_joint_positions
+
+
 class VRHandVisualizer:
-    """Visualizer for VR hand motion data using spheres."""
+    """Visualizer for VR hand motion data using spheres with gradient materials."""
     
     def __init__(self, prim_path: str = "/World/VRHand"):
         """Initialize the VR hand visualizer.
@@ -286,6 +575,7 @@ class VRHandVisualizer:
         """
         self.prim_path = prim_path
         self.joint_spheres = {}
+        self.joint_materials = {}
         self.joint_names = [
             "Wrist", "ForearmWrist", "Palm",
             "ThumbMetacarpal", "ThumbProximal", "ThumbDistal", "ThumbTip",
@@ -295,46 +585,46 @@ class VRHandVisualizer:
             "PinkyMetacarpal", "PinkyProximal", "PinkyIntermediate", "PinkyDistal", "PinkyTip"
         ]
         
-        # Different colors for different finger groups
-        self.joint_colors = {
-            "Wrist": (1.0, 1.0, 1.0),  # White
-            "ForearmWrist": (0.8, 0.8, 0.8),  # Light gray
-            "Palm": (0.6, 0.6, 0.6),  # Gray
-            "Thumb": (1.0, 0.0, 0.0),  # Red
-            "Index": (0.0, 1.0, 0.0),  # Green
-            "Middle": (0.0, 0.0, 1.0),  # Blue
-            "Ring": (1.0, 1.0, 0.0),  # Yellow
-            "Pinky": (1.0, 0.0, 1.0),  # Magenta
+        # Define joint hierarchy for gradient calculation (0=base, higher=tip)
+        self.joint_hierarchy = {
+            "Wrist": 0, "ForearmWrist": 0, "Palm": 0,
+            "ThumbMetacarpal": 1, "ThumbProximal": 2, "ThumbDistal": 3, "ThumbTip": 4,
+            "IndexMetacarpal": 1, "IndexProximal": 2, "IndexIntermediate": 3, "IndexDistal": 4, "IndexTip": 5,
+            "MiddleMetacarpal": 1, "MiddleProximal": 2, "MiddleIntermediate": 3, "MiddleDistal": 4, "MiddleTip": 5,
+            "RingMetacarpal": 1, "RingProximal": 2, "RingIntermediate": 3, "RingDistal": 4, "RingTip": 5,
+            "PinkyMetacarpal": 1, "PinkyProximal": 2, "PinkyIntermediate": 3, "PinkyDistal": 4, "PinkyTip": 5
         }
         
         self._create_joint_spheres()
     
-    def _get_joint_color(self, joint_name: str) -> tuple:
-        """Get color for a joint based on its name.
+    def _get_joint_gradient_color(self, joint_name: str) -> tuple:
+        """Get gradient blue color for a joint based on its hierarchy.
         
         Args:
-            joint_name: Name of the joint.
+            joint_name: Name of the joint
             
         Returns:
-            RGB color tuple.
+            RGB color tuple (r, g, b) with gradient blue
         """
-        if "Thumb" in joint_name:
-            return self.joint_colors["Thumb"]
-        elif "Index" in joint_name:
-            return self.joint_colors["Index"]
-        elif "Middle" in joint_name:
-            return self.joint_colors["Middle"]
-        elif "Ring" in joint_name:
-            return self.joint_colors["Ring"]
-        elif "Pinky" in joint_name:
-            return self.joint_colors["Pinky"]
-        elif joint_name in ["Wrist", "ForearmWrist", "Palm"]:
-            return self.joint_colors[joint_name]
+        hierarchy_level = self.joint_hierarchy.get(joint_name, 0)
+        max_level = 5  # Maximum hierarchy level (fingertips)
+        
+        # Calculate gradient: darker blue at base (0) to lighter blue at tips (max_level)
+        # Base color: dark blue (0.0, 0.0, 0.8)
+        # Tip color: light blue (0.7, 0.9, 1.0)
+        if hierarchy_level == 0:
+            # Base joints (Wrist, Palm) - darkest blue
+            return (0.0, 0.0, 0.8)
         else:
-            return (0.5, 0.5, 0.5)  # Default gray
+            # Finger joints - gradient from dark to light blue
+            t = hierarchy_level / max_level  # 0 to 1
+            r = 0.0 + (0.7 - 0.0) * t  # 0.0 to 0.7
+            g = 0.0 + (0.9 - 0.0) * t  # 0.0 to 0.9
+            b = 0.8 + (1.0 - 0.8) * t  # 0.8 to 1.0
+            return (r, g, b)
     
     def _create_joint_spheres(self):
-        """Create sphere primitives for each joint."""
+        """Create sphere primitives for each joint with gradient materials."""
         # Create parent group
         prim_utils.create_prim(f"{self.prim_path}", "Xform")
         
@@ -342,12 +632,52 @@ class VRHandVisualizer:
             sphere_path = f"{self.prim_path}/{joint_name}"
             
             # Create sphere using Isaac Lab spawner (larger radius for better visibility)
-            sphere_cfg = shapes_cfg.SphereCfg(radius=0.01)
+            sphere_cfg = shapes_cfg.SphereCfg(radius=0.0067)
             shapes.spawn_sphere(sphere_path, sphere_cfg)
             
-            # For now, just create the spheres without materials
-            # We can add colors later if needed
+            # Create material with gradient blue color
+            self._create_material_for_joint(joint_name, sphere_path)
+            
             self.joint_spheres[joint_name] = sphere_path
+    
+    def _create_material_for_joint(self, joint_name: str, sphere_path: str):
+        """Create a material with gradient blue color for a joint.
+        
+        Args:
+            joint_name: Name of the joint
+            sphere_path: USD path to the sphere primitive
+        """
+        from pxr import UsdShade, Sdf
+        
+        # Get gradient color for this joint
+        color = self._get_joint_gradient_color(joint_name)
+        
+        # Create material path
+        material_path = f"{self.prim_path}/Materials/{joint_name}_Material"
+        
+        # Create material
+        material = UsdShade.Material.Define(stage_utils.get_current_stage(), material_path)
+        
+        # Create shader
+        shader = UsdShade.Shader.Define(stage_utils.get_current_stage(), f"{material_path}/Shader")
+        shader.CreateIdAttr("UsdPreviewSurface")
+        
+        # Set shader parameters
+        shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set((color[0], color[1], color[2]))
+        shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
+        shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.3)
+        shader.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set((0.0, 0.0, 0.0))
+        
+        # Connect shader to material
+        material.CreateSurfaceOutput().ConnectToSource(shader.CreateOutput("surface", Sdf.ValueTypeNames.Token))
+        
+        # Bind material to sphere
+        sphere_prim = prim_utils.get_prim_at_path(sphere_path)
+        if sphere_prim:
+            UsdShade.MaterialBindingAPI.Apply(sphere_prim).Bind(material)
+        
+        # Store material reference
+        self.joint_materials[joint_name] = material_path
     
     def update_joint_positions(self, joint_positions: torch.Tensor, offset: torch.Tensor | None = None):
         """Update the positions of all joint spheres.
@@ -391,18 +721,20 @@ def define_origins(num_origins: int, spacing: float) -> list[list[float]]:
     return env_origins.tolist()
 
 
-def design_scene() -> tuple[dict, list[list[float]], VRHandMotionSequence, VRHandVisualizer]:
+def design_scene() -> tuple[dict, list[list[float]], VRHandMotionSequence, VRHandVisualizer, VRToShadowHandIK]:
     """Designs the scene."""
-    # Ground-plane
-    cfg = sim_utils.GroundPlaneCfg()
-    cfg.func("/World/defaultGroundPlane", cfg)
+    # Ground plane removed for better VR hand visibility
     # Lights
     cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
     cfg.func("/World/Light", cfg)
 
     # Create separate groups called "Origin1", "Origin2"
     # Origin1: Shadow Hand, Origin2: VR Hand Visualization
-    origins = define_origins(num_origins=2, spacing=0.8)
+    # Use custom positions based on captured image values
+    origins = [
+        [0.13587, 0.11907, -1.07026],  # Origin1: Shadow Hand position
+        [0.0, 0.0, 0.0]                # Origin2: VR Hand at origin
+    ]
 
     # Origin 1 with Shadow Hand
     prim_utils.create_prim("/World/Origin1", "Xform", translation=origins[0])
@@ -418,16 +750,17 @@ def design_scene() -> tuple[dict, list[list[float]], VRHandMotionSequence, VRHan
     dataset_path = os.path.join(os.path.dirname(__file__), "..", "..", "datasets", "Quest")
     vr_motion_sequence = VRHandMotionSequence(dataset_path, sequence_type="Pick", target_duration=3.0)
     vr_hand_visualizer = VRHandVisualizer("/World/Origin2/VRHand")
+    ik_solver = VRToShadowHandIK()
 
     # return the scene information
     scene_entities = {
         "shadow_hand": shadow_hand,
     }
-    return scene_entities, origins, vr_motion_sequence, vr_hand_visualizer
+    return scene_entities, origins, vr_motion_sequence, vr_hand_visualizer, ik_solver
 
 
 def run_simulator(sim: sim_utils.SimulationContext, entities: dict[str, Articulation], origins: torch.Tensor, 
-                  vr_motion_sequence: VRHandMotionSequence, vr_hand_visualizer: VRHandVisualizer):
+                  vr_motion_sequence: VRHandMotionSequence, vr_hand_visualizer: VRHandVisualizer, ik_solver: VRToShadowHandIK):
     """Runs the simulation loop."""
     # Define simulation stepping
     sim_dt = sim.get_physics_dt()
@@ -469,18 +802,11 @@ def run_simulator(sim: sim_utils.SimulationContext, entities: dict[str, Articula
         
         # Update VR hand visualization every few frames
         if count % 5 == 0 and vr_motion_sequence.has_current_frame():
-            print(f"[DEBUG]: Processing frame {vr_motion_sequence.current_frame_index}")
             joint_positions = vr_motion_sequence.get_current_joint_positions()
             
             # Apply offset to position the VR hand next to the robot hand
             vr_offset = torch.tensor([0.0, 0.0, 0.0], device=sim.device)
             vr_hand_visualizer.update_joint_positions(joint_positions, vr_offset)
-            
-            # Debug: Print first few joint positions occasionally
-            if count % 100 == 0:
-                print(f"[DEBUG]: VR Hand - Frame {vr_motion_sequence.current_frame_index}, "
-                      f"Wrist pos: {joint_positions[0].tolist()}, "
-                      f"Palm pos: {joint_positions[2].tolist()}")
             
             # Move to next frame
             if not vr_motion_sequence.next_frame():
@@ -488,15 +814,32 @@ def run_simulator(sim: sim_utils.SimulationContext, entities: dict[str, Articula
                 print(f"[INFO]: Motion completed, switching to next motion")
                 if not vr_motion_sequence.next_motion():
                     print("[WARNING]: Failed to load next motion")
-        elif count % 5 == 0:
-            print(f"[DEBUG]: No current frame available")
         
-        # Apply default actions to the robot hands
+        # Apply VR motion to robot hands using IK
         for robot in entities.values():
-            # generate joint positions
-            joint_pos_target = robot.data.soft_joint_pos_limits[..., grasp_mode]
-            # apply action to the robot
-            robot.set_joint_position_target(joint_pos_target)
+            if vr_motion_sequence.has_current_frame():
+                # Get VR joint positions and names
+                vr_joint_positions = vr_motion_sequence.get_current_joint_positions()
+                vr_joint_names = vr_motion_sequence.joint_names
+                
+                # Solve IK to get Shadow Hand joint angles
+                shadow_joint_angles = ik_solver.solve_ik(vr_joint_positions, vr_joint_names)
+                
+                # Debug: Print IK results (less frequently)
+                if count % 100 == 0:  # Print every 100 steps
+                    print(f"[DEBUG] Frame {count}: VR data loaded, Shadow angles: {shadow_joint_angles[0]:.3f}, {shadow_joint_angles[1]:.3f}")
+                
+                # Apply to robot
+                robot.set_joint_position_target(shadow_joint_angles)
+                
+                # Apply direct wrist position mapping if available
+                if hasattr(ik_solver, 'vr_wrist_position') and ik_solver.vr_wrist_position is not None:
+                    _update_robot_wrist_position(robot, ik_solver.vr_wrist_position)
+            else:
+                # Fallback to default grasp mode if no VR data
+                joint_pos_target = robot.data.soft_joint_pos_limits[..., grasp_mode]
+                robot.set_joint_position_target(joint_pos_target)
+            
             # write data to sim
             robot.write_data_to_sim()
         
@@ -505,9 +848,44 @@ def run_simulator(sim: sim_utils.SimulationContext, entities: dict[str, Articula
         # update sim-time
         sim_time += sim_dt
         count += 1
-        # update buffers
-        for robot in entities.values():
-            robot.update(sim_dt)
+
+
+def _update_robot_wrist_position(robot, vr_wrist_position):
+    """Update robot's wrist position to match VR wrist position.
+    
+    Args:
+        robot: The robot articulation object
+        vr_wrist_position: VR wrist position as torch.Tensor
+    """
+    try:
+        # Get the robot's wrist prim path
+        # Assuming the robot is named "Robot" and wrist is "robot0_wrist"
+        wrist_prim_path = "/World/Origin1/Robot/robot0_wrist"
+        
+        # Get the prim from the stage
+        from isaacsim.core.utils import stage_utils
+        stage = stage_utils.get_current_stage()
+        wrist_prim = stage.GetPrimAtPath(wrist_prim_path)
+        
+        if wrist_prim.IsValid():
+            # Convert VR position to Isaac Sim coordinates if needed
+            # VR position is already in Isaac Sim coordinates from get_joint_positions
+            isaac_position = vr_wrist_position
+            
+            # Update the wrist position
+            xform = UsdGeom.Xformable(wrist_prim)
+            if xform:
+                # Clear existing transform
+                xform.ClearXformOpOrder()
+                # Set new translation
+                xform.AddTranslateOp().Set(Gf.Vec3d(isaac_position[0], isaac_position[1], isaac_position[2]))
+            else:
+                pass  # Silent failure
+        else:
+            pass  # Silent failure
+                
+        except Exception as e:
+            pass  # Silent failure
 
 
 def main():
@@ -518,14 +896,14 @@ def main():
     # Set main camera
     sim.set_camera_view(eye=(0.0, -0.5, 1.5), target=(0.0, -0.2, 0.5))
     # design scene
-    scene_entities, scene_origins, vr_motion_sequence, vr_hand_visualizer = design_scene()
+    scene_entities, scene_origins, vr_motion_sequence, vr_hand_visualizer, ik_solver = design_scene()
     scene_origins = torch.tensor(scene_origins, device=sim.device)
     # Play the simulator
     sim.reset()
     # Now we are ready!
     print("[INFO]: Setup complete...")
     # Run the simulator
-    run_simulator(sim, scene_entities, scene_origins, vr_motion_sequence, vr_hand_visualizer)
+    run_simulator(sim, scene_entities, scene_origins, vr_motion_sequence, vr_hand_visualizer, ik_solver)
 
 
 if __name__ == "__main__":
