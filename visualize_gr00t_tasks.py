@@ -11,6 +11,9 @@ from datasets import load_dataset
 from pathlib import Path
 import os
 
+# Isaac Lab imports
+from isaaclab.app import AppLauncher
+
 def convert_gr00t_to_hdf5(dataset_name="nvidia/PhysicalAI-GR00T-Tuned-Tasks", 
                           output_file="datasets/gr00t_tuned_tasks.hdf5",
                           max_episodes=10):
@@ -32,11 +35,13 @@ def convert_gr00t_to_hdf5(dataset_name="nvidia/PhysicalAI-GR00T-Tuned-Tasks",
         
         # Create data group
         data_group = f.create_group('data')
-        data_group.attrs['env_args'] = {
+        # Save env_args as JSON string (HDF5 doesn't support dict directly)
+        import json
+        data_group.attrs['env_args'] = json.dumps({
             'task': 'Isaac-GR00T-Tuned-Tasks-v0',
             'num_envs': 1,
             'device': 'cuda:0'
-        }
+        })
         
         # Store data by episode
         episode_data = {}
@@ -304,6 +309,7 @@ if __name__ == "__main__":
     print("Visualization script created: visualize_gr00t_tasks.py")
 
 def main():
+    # Create argument parser
     parser = argparse.ArgumentParser(description="GR00T Tuned Tasks dataset Isaac Lab conversion")
     parser.add_argument("--dataset_name", type=str, default="nvidia/PhysicalAI-GR00T-Tuned-Tasks",
                        help="Hugging Face dataset name")
@@ -313,8 +319,20 @@ def main():
                        help="Maximum number of episodes")
     parser.add_argument("--create_visualizer", action="store_true",
                        help="Also create visualization script")
+    parser.add_argument("--simulate", action="store_true",
+                       help="Run simulation in Isaac Lab after conversion")
+    parser.add_argument("--max_sim_steps", type=int, default=1000,
+                       help="Maximum simulation steps to prevent freezing")
     
+    # Add AppLauncher arguments
+    AppLauncher.add_app_launcher_args(parser)
+    
+    # Parse arguments
     args = parser.parse_args()
+    
+    # Launch Isaac Lab
+    app_launcher = AppLauncher(args)
+    simulation_app = app_launcher.app
     
     print("Starting GR00T Tuned Tasks dataset Isaac Lab conversion")
     print("=" * 60)
@@ -330,11 +348,176 @@ def main():
     if args.create_visualizer:
         create_visualization_script()
     
+    # Run simulation if requested
+    if args.simulate:
+        run_simulation(hdf5_file, simulation_app, args.max_sim_steps)
+    
     print("\nConversion completed!")
     print(f"HDF5 file: {hdf5_file}")
     print(f"Visualization methods:")
     print(f"   1. python visualize_gr00t_tasks.py --hdf5_file {hdf5_file}")
-    print(f"   2. Replay in Isaac Lab: ./isaaclab.sh -p scripts/tools/replay_demos.py --dataset_file {hdf5_file}")
+    print(f"   2. Replay in Isaac Lab: isaaclab.bat -p scripts/tools/replay_demos.py --dataset_file {hdf5_file}")
+    print(f"   3. Run simulation: isaaclab.bat -p custom_scripts/isaac-vr/visualize_gr00t_tasks.py --simulate")
+    
+    # Close simulation app
+    simulation_app.close()
+
+def run_simulation(hdf5_file, simulation_app, max_sim_steps=1000):
+    """Run simulation in Isaac Lab with OOJU Warehouse scene"""
+    from isaaclab.sim import SimulationCfg, SimulationContext
+    from isaaclab.assets import ArticulationCfg, AssetBaseCfg
+    from isaaclab.scene import InteractiveSceneCfg, InteractiveScene
+    from isaaclab.sim.spawners import UsdFileCfg
+    from isaaclab.actuators import ImplicitActuatorCfg
+    from isaaclab.utils import configclass
+    import omni.usd
+    import omni.kit.commands
+    import os
+    
+    print("Setting up Isaac Lab simulation with OOJU Warehouse...")
+    
+    # Initialize simulation context
+    sim_cfg = SimulationCfg(dt=0.01)
+    sim = SimulationContext(sim_cfg)
+    
+    # Load the OOJU Warehouse scene using Isaac Lab's scene loading
+    warehouse_scene_path = os.path.abspath("Scenes/OOJU_Warehouse.usd")
+    if os.path.exists(warehouse_scene_path):
+        print(f"Loading warehouse scene: {warehouse_scene_path}")
+        try:
+            # Use Isaac Lab's scene loading method
+            from isaacsim.core.utils.stage import add_reference_to_stage
+            add_reference_to_stage(usd_path=warehouse_scene_path, prim_path="/World/Warehouse")
+            print("Warehouse scene loaded successfully!")
+        except Exception as e:
+            print(f"Warning: Could not load warehouse scene: {e}")
+            print("Using default scene instead")
+    else:
+        print("Warning: OOJU_Warehouse.usd not found, using default scene")
+    
+    # Alternative: Load scene using USD stage
+    try:
+        from omni.usd import get_context
+        stage = get_context().get_stage()
+        if stage is None:
+            print("Warning: No USD stage available")
+        else:
+            print("USD stage is available")
+    except Exception as e:
+        print(f"Warning: Could not access USD stage: {e}")
+    
+    # Create a robot scene configuration
+    @configclass
+    class RobotSceneCfg(InteractiveSceneCfg):
+        """Configuration for robot in warehouse scene"""
+        
+        # Required fields for InteractiveSceneCfg
+        num_envs: int = 1
+        env_spacing: float = 1.0
+        
+        # Add a Franka robot
+        robot = ArticulationCfg(
+            prim_path="/World/Robot",
+            spawn=UsdFileCfg(
+                usd_path="http://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/4.5/Isaac/Robots/Franka/franka_alt_fingers.usd",
+            ),
+            init_state=ArticulationCfg.InitialStateCfg(
+                pos=(0.0, 0.0, 0.0),
+                joint_pos={
+                    "panda_joint1": 0.0,
+                    "panda_joint2": -0.785,
+                    "panda_joint3": 0.0,
+                    "panda_joint4": -2.356,
+                    "panda_joint5": 0.0,
+                    "panda_joint6": 1.571,
+                    "panda_joint7": 0.785,
+                },
+            ),
+            actuators={
+                "panda_joint.*": ImplicitActuatorCfg(
+                    joint_names_expr={"panda_joint.*"},
+                    effort_limit=87.0,
+                    velocity_limit=2.175,
+                    stiffness=400.0,
+                    damping=40.0,
+                )
+            },
+        )
+    
+    # Create scene with robot
+    scene_cfg = RobotSceneCfg()
+    scene = InteractiveScene(scene_cfg)
+    
+    # Set camera view to see the warehouse and robot
+    sim.set_camera_view([3.0, 3.0, 2.0], [0.0, 0.0, 0.5])
+    
+    # Reset simulation
+    sim.reset()
+    scene.reset()
+    print("Simulation setup complete!")
+    print("Warehouse scene loaded with robot!")
+    
+    # Load and replay data
+    try:
+        with h5py.File(hdf5_file, 'r') as f:
+            demo_name = list(f['data'].keys())[0]
+            demo_data = f['data'][demo_name]
+            actions = demo_data['actions'][:]
+            observations = demo_data['obs/state'][:]
+            
+            print(f"Replaying demo: {demo_name}")
+            print(f"Total steps available: {len(actions)}")
+            print(f"Max simulation steps: {max_sim_steps}")
+            print("Press Ctrl+C to stop simulation")
+            print("Robot will move according to dataset observations")
+            
+            # Get robot handle
+            robot = scene["robot"]
+            
+            step_count = 0
+            max_steps = min(len(actions), max_sim_steps)
+            
+            while simulation_app.is_running() and step_count < max_steps:
+                try:
+                    # Apply joint positions from dataset to robot
+                    if step_count < len(observations):
+                        # Extract joint positions (first 7 joints for Franka robot)
+                        joint_positions = observations[step_count][:7]  # First 7 joints
+                        
+                        # Convert numpy array to torch tensor and reshape for robot
+                        import torch
+                        joint_positions_tensor = torch.from_numpy(joint_positions).float().unsqueeze(0)  # Add batch dimension
+                        
+                        # Set joint positions
+                        robot.set_joint_position_target(joint_positions_tensor)
+                        robot.write_data_to_sim()
+                    
+                    # Step simulation
+                    sim.step()
+                    scene.update(sim.get_physics_dt())
+                    
+                    step_count += 1
+                    
+                    if step_count % 50 == 0:
+                        print(f"Step {step_count}/{max_steps} - Joint pos: {joint_positions[:3] if step_count < len(observations) else 'N/A'}")
+                        
+                    # Add small delay to prevent freezing
+                    import time
+                    time.sleep(0.01)
+                    
+                except KeyboardInterrupt:
+                    print("\nSimulation interrupted by user")
+                    break
+                    
+            if step_count >= max_steps:
+                print(f"Demo replay completed! (Processed {step_count} steps)")
+                
+    except KeyboardInterrupt:
+        print("\nSimulation stopped by user")
+    except Exception as e:
+        print(f"Error during simulation: {e}")
+    
+    print("Simulation completed!")
 
 if __name__ == "__main__":
     main()
