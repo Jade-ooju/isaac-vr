@@ -373,6 +373,7 @@ def run_simulation(hdf5_file, simulation_app, max_sim_steps=1000):
     import omni.usd
     import omni.kit.commands
     import os
+    import numpy as np
     
     print("Setting up Isaac Lab simulation with OOJU Warehouse...")
     
@@ -395,7 +396,8 @@ def run_simulation(hdf5_file, simulation_app, max_sim_steps=1000):
     else:
         print("Warning: OOJU_Warehouse.usd not found, using default scene")
     
-    # Alternative: Load scene using USD stage
+    # Find robot in the scene
+    robot_prim_path = None
     try:
         from omni.usd import get_context
         stage = get_context().get_stage()
@@ -403,8 +405,31 @@ def run_simulation(hdf5_file, simulation_app, max_sim_steps=1000):
             print("Warning: No USD stage available")
         else:
             print("USD stage is available")
+            # Find robot in the scene
+            def find_robot_prims(prim, robot_prims):
+                if "GR1T2" in prim.GetName() or "fourier" in prim.GetName().lower():
+                    robot_prims.append(prim.GetPath())
+                for child in prim.GetChildren():
+                    find_robot_prims(child, robot_prims)
+            
+            robot_prims = []
+            find_robot_prims(stage.GetPrimAtPath("/World"), robot_prims)
+            
+            if robot_prims:
+                robot_prim_path = str(robot_prims[0])
+                print(f"Found robot at path: {robot_prim_path}")
+            else:
+                print("No GR1T2 robot found in scene")
+                # List all prims to help debug
+                print("Available prims in /World:")
+                for prim in stage.GetPrimAtPath("/World").GetChildren():
+                    print(f"  - {prim.GetName()}: {prim.GetPath()}")
     except Exception as e:
         print(f"Warning: Could not access USD stage: {e}")
+    
+    if robot_prim_path is None:
+        print("Error: Could not find GR1T2 robot in the scene")
+        return
     
     # Create a robot scene configuration
     @configclass
@@ -415,33 +440,15 @@ def run_simulation(hdf5_file, simulation_app, max_sim_steps=1000):
         num_envs: int = 1
         env_spacing: float = 1.0
         
-        # Add a Franka robot
+        # Use existing GR1T2_fourier_hand_6dof robot in the scene
         robot = ArticulationCfg(
-            prim_path="/World/Robot",
-            spawn=UsdFileCfg(
-                usd_path="http://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/4.5/Isaac/Robots/Franka/franka_alt_fingers.usd",
-            ),
+            prim_path=robot_prim_path,  # Use dynamically found path
+            spawn=None,  # Robot already exists in scene
             init_state=ArticulationCfg.InitialStateCfg(
-                pos=(0.0, 0.0, 0.0),
-                joint_pos={
-                    "panda_joint1": 0.0,
-                    "panda_joint2": -0.785,
-                    "panda_joint3": 0.0,
-                    "panda_joint4": -2.356,
-                    "panda_joint5": 0.0,
-                    "panda_joint6": 1.571,
-                    "panda_joint7": 0.785,
-                },
+                pos=(0.0, 0.0, 0.0),  # Keep original position
+                joint_pos={},  # Will be set dynamically from dataset
             ),
-            actuators={
-                "panda_joint.*": ImplicitActuatorCfg(
-                    joint_names_expr={"panda_joint.*"},
-                    effort_limit=87.0,
-                    velocity_limit=2.175,
-                    stiffness=400.0,
-                    damping=40.0,
-                )
-            },
+            actuators={},  # Will be configured after robot is loaded
         )
     
     # Create scene with robot
@@ -474,6 +481,42 @@ def run_simulation(hdf5_file, simulation_app, max_sim_steps=1000):
             # Get robot handle
             robot = scene["robot"]
             
+            # Analyze robot joint structure
+            print("Analyzing robot joint structure...")
+            joint_names = robot.joint_names
+            num_joints = len(joint_names)
+            print(f"Robot has {num_joints} joints: {joint_names}")
+            
+            # Analyze dataset structure
+            obs_shape = observations.shape
+            print(f"Dataset observations shape: {obs_shape}")
+            print(f"Dataset has {obs_shape[1]} observation dimensions")
+            
+            # Check if this is a GR1T2-specific dataset
+            print("\nAnalyzing dataset structure for GR1T2 compatibility...")
+            print("First few observation values:")
+            for i in range(min(5, len(observations))):
+                print(f"  Step {i}: {observations[i][:10]}...")  # Show first 10 values
+            
+            # Determine joint mapping
+            if obs_shape[1] >= num_joints:
+                print(f"Using first {num_joints} dimensions from dataset for joint control")
+                joint_mapping = list(range(num_joints))
+            else:
+                print(f"Dataset has fewer dimensions ({obs_shape[1]}) than robot joints ({num_joints})")
+                print("This suggests the dataset might be designed for a specific subset of joints")
+                print("Using all available dimensions and padding with zeros")
+                joint_mapping = list(range(obs_shape[1]))
+                
+                # Try to identify which joints the dataset might be targeting
+                print("\nAttempting to identify target joints...")
+                print("Robot joint names (first 26):")
+                for i, joint_name in enumerate(joint_names[:26]):
+                    print(f"  {i:2d}: {joint_name}")
+                print("Robot joint names (remaining):")
+                for i, joint_name in enumerate(joint_names[26:], 26):
+                    print(f"  {i:2d}: {joint_name}")
+            
             step_count = 0
             max_steps = min(len(actions), max_sim_steps)
             
@@ -481,8 +524,13 @@ def run_simulation(hdf5_file, simulation_app, max_sim_steps=1000):
                 try:
                     # Apply joint positions from dataset to robot
                     if step_count < len(observations):
-                        # Extract joint positions (first 7 joints for Franka robot)
-                        joint_positions = observations[step_count][:7]  # First 7 joints
+                        # Extract joint positions based on mapping
+                        if len(joint_mapping) == num_joints:
+                            joint_positions = observations[step_count][joint_mapping]
+                        else:
+                            # Pad with zeros if dataset has fewer dimensions
+                            joint_positions = np.zeros(num_joints)
+                            joint_positions[:len(joint_mapping)] = observations[step_count][joint_mapping]
                         
                         # Convert numpy array to torch tensor and reshape for robot
                         import torch
